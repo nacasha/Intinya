@@ -1,0 +1,131 @@
+import SwiftUI
+
+/// Keeps the app alive when the main window closes — and, crucially, keeps the
+/// window itself alive so it can come back.
+///
+/// Returning false from `applicationShouldTerminateAfterLastWindowClosed` stops
+/// a closed window from killing an in-progress recording. On its own, though, it
+/// strands the app: the process keeps running with zero windows, clicking the
+/// Dock icon does nothing, and `open` on an already-running app is a no-op. The
+/// app looks blank because there is genuinely nothing on screen.
+///
+/// So the close button hides the window instead of destroying it, and reopening
+/// brings the same window back.
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+
+    private weak var mainWindow: NSWindow?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Resolve the login-shell environment now, in the background. Otherwise
+        // the first AI action pays for spawning a shell inline, mid-meeting.
+        Task.detached(priority: .utility) {
+            _ = ShellEnvironment.current()
+        }
+
+        // The scene's window exists by the next runloop pass.
+        DispatchQueue.main.async { [weak self] in
+            self?.adoptMainWindow()
+        }
+    }
+
+    private func adoptMainWindow() {
+        guard mainWindow == nil else { return }
+        // The MenuBarExtra also owns a window; take the real one.
+        mainWindow = NSApp.windows.first { $0.canBecomeMain && $0.contentView != nil }
+        mainWindow?.delegate = self
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Hide rather than close, so the window can be restored intact.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    /// Dock click, or `open` on the running app.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow()
+        return true
+    }
+
+    func showMainWindow() {
+        adoptMainWindow()
+        guard let window = mainWindow else { return }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+struct MeetingApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var recorder = Recorder()
+    @StateObject private var modelStore = ModelStore()
+    @StateObject private var sessionStore = SessionStore()
+    @StateObject private var glossaryStore = GlossaryStore()
+    @StateObject private var meetingTypeStore = MeetingTypeStore()
+    @StateObject private var activityCenter = ActivityCenter()
+
+    var body: some Scene {
+        Window("Meeting", id: "main") {
+            RootView()
+                .environmentObject(recorder)
+                .environmentObject(modelStore)
+                .environmentObject(sessionStore)
+                .environmentObject(glossaryStore)
+                .environmentObject(meetingTypeStore)
+                .environmentObject(activityCenter)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+
+        // Recording controls shouldn't require the main window to be frontmost.
+        MenuBarExtra {
+            MenuBarContent()
+                .environmentObject(recorder)
+        } label: {
+            Image(systemName: recorder.isRecording ? "record.circle.fill" : "waveform")
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+struct MenuBarContent: View {
+    @EnvironmentObject private var recorder: Recorder
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button(recorder.isRecording ? "Stop Recording" : "Start Recording") {
+            recorder.toggleRecording()
+        }
+        .disabled(!recorder.isModelReady)
+
+        if recorder.isRecording {
+            Text("Recording · \(recorder.monitor.elapsed.clockString)")
+        } else {
+            Text(recorder.status)
+        }
+
+        Divider()
+
+        Button("Open Meeting") {
+            if let delegate = NSApp.delegate as? AppDelegate {
+                delegate.showMainWindow()
+            } else {
+                openWindow(id: "main")
+            }
+        }
+
+        Button("Reveal Recordings") {
+            guard let url = recorder.currentSessionDirectory else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        .disabled(recorder.currentSessionDirectory == nil)
+
+        Divider()
+        Button("Quit") { NSApplication.shared.terminate(nil) }
+            .keyboardShortcut("q")
+    }
+}

@@ -1,0 +1,215 @@
+name: Release
+
+# Manual only. Nothing here runs on push or on pull requests, which is also what
+# keeps the signing certificate out of reach of code that arrives from a fork.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "How much to raise the last released version by"
+        required: false
+        type: choice
+        default: patch
+        options: [patch, minor, major]
+      version:
+        description: "Exact version to release, without the leading v (e.g. 1.4.0). Overrides the bump."
+        required: false
+        type: string
+        default: ""
+      notarize:
+        description: "Notarize with Apple and staple the ticket"
+        required: false
+        type: boolean
+        default: true
+      draft:
+        description: "Publish the release as a draft"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macos-latest moves with GitHub's images, and with it the default Xcode.
+    # Pin this to a specific image label once you know which ones are on offer,
+    # so a bump cannot quietly change the toolchain under a release.
+    runs-on: macos-latest
+
+    # The signing certificate and notary key live in this environment rather
+    # than in the repository, so that a required reviewer can be put in front of
+    # them. Nothing can reach them without that approval, whoever starts the run.
+    environment: release
+
+    env:
+      APP: build/Meeting.app
+
+    steps:
+      # Pinned to a commit rather than a tag: tags can be moved, and this job
+      # holds a signing key while it runs.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The whole history and every tag: the version is worked out from the
+          # last one, and the release notes are generated from what came after.
+          fetch-depth: 0
+
+      - name: Record the toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # The WhisperKit package graph is the slow part of a cold build, and it
+      # only changes when Package.resolved does.
+      - name: Cache SwiftPM
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Resolve version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+
+          if [ -z "$VERSION" ]; then
+            # --sort=-v:refname orders these as versions rather than as text, so
+            # v1.10.0 comes out above v1.9.0.
+            LATEST="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)"
+            LATEST="${LATEST#v}"
+            echo "Last released version: ${LATEST:-none}"
+
+            # A tag as short as v1.2 would leave the last part empty, so the
+            # parts that are missing count as zero.
+            IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST:-0.0.0}"
+            MAJOR="${MAJOR:-0}"
+            MINOR="${MINOR:-0}"
+            PATCH="${PATCH:-0}"
+            case "${{ inputs.bump }}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              *)     PATCH=$((PATCH + 1)) ;;
+            esac
+            VERSION="$MAJOR.$MINOR.$PATCH"
+            echo "Raising the ${{ inputs.bump }} part to $VERSION"
+          fi
+
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Version '$VERSION' is not three numbers separated by dots." >&2
+            exit 1
+          fi
+
+          # Should not happen once the version is worked out from the tags, but
+          # an explicit version can still collide, and finding out now costs
+          # seconds rather than a build and a round trip to Apple.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" > /dev/null 2>&1; then
+            echo "Tag v$VERSION already exists." >&2
+            exit 1
+          fi
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "Release v$VERSION already exists." >&2
+            exit 1
+          fi
+
+          echo "Releasing v$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # A universal build plus notarisation runs long, so the keychain is
+          # given an hour rather than the usual few minutes before it relocks.
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+          # Without this codesign stops to ask for permission to use the key,
+          # and there is nobody there to answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')"
+          if [ -z "$IDENTITY" ]; then
+            echo "No Developer ID Application identity in the imported certificate." >&2
+            exit 1
+          fi
+          echo "Signing as: $IDENTITY"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build and sign
+        env:
+          # Universal, so the result runs on Intel Macs as well as Apple
+          # silicon. The same script a developer runs locally, so a release
+          # cannot be built by a path nobody has exercised.
+          UNIVERSAL: "1"
+          TIMESTAMP: "1"
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          Scripts/build-debug.sh
+          lipo -archs "$APP/Contents/MacOS/Meeting"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "^Authority=Developer|TeamIdentifier|flags="
+          # The number in the app and the number on the release have to agree.
+          BUILT="$(defaults read "$PWD/$APP/Contents/Info.plist" CFBundleShortVersionString)"
+          echo "Built version: $BUILT"
+          [ "$BUILT" = "$VERSION" ] || { echo "Built $BUILT but releasing $VERSION." >&2; exit 1; }
+
+      - name: Notarize and staple
+        if: ${{ inputs.notarize }}
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          echo "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent --sequesterRsrc "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/notarize.zip"
+          # Stapling puts the ticket inside the bundle, so the app opens even on
+          # a machine that cannot reach Apple.
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl -a -t exec -vv "$APP"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          # ditto rather than zip, which does not preserve the signature.
+          ditto -c -k --keepParent --sequesterRsrc "$APP" "Meeting-$VERSION.zip"
+          shasum -a 256 "Meeting-$VERSION.zip"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --generate-notes \
+            ${{ inputs.draft && '--draft' || '' }} \
+            "Meeting-$VERSION.zip"
+
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain" || true

@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Meeting",
+      "program": "${workspaceFolder}/build/Meeting.app/Contents/MacOS/Meeting",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Build (debug, fast)"
+    }
+  ]
+}
