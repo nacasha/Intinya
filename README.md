@@ -1,26 +1,41 @@
-# Meeting
+# Intinya
 
-On-device meeting transcription for macOS. Captures **system audio and your
-microphone as two separate tracks**, transcribes them live, and is built for
+**On-device meeting transcription for macOS.** Captures system audio and your
+microphone as two separate tracks, transcribes them live, and is built for
 **Bahasa Indonesia with mid-sentence English**.
 
-## Build & run
+*Intinya* is Indonesian for “the gist of it”.
 
-```bash
-./Scripts/build-debug.sh       # builds and signs build/Meeting.app
-./Scripts/build-debug.sh --run # ...and relaunches it
-```
+## What it does
 
-Requires macOS 14+. Uses Xcode 26.3 via `DEVELOPER_DIR` when that version is
-installed, so `xcode-select` does not need changing.
+- **Two tracks, never mixed.** Your microphone and the meeting’s audio are
+  captured and transcribed separately, so you get speaker attribution without a
+  diarization model.
+- **Live, then better.** A fast pass transcribes as you speak; a slower, more
+  accurate model replaces those lines afterwards, in place.
+- **Built for code-switching.** Pinned to Indonesian, with a glossary that keeps
+  English product and technical terms intact instead of phonetically mangled.
+- **Screen capture alongside.** Keyframes when the screen changes, or continuous
+  video — either way a frame is one click from the line said over it.
+- **Notes and annotations.** Free-form notes per recording, plus a note against
+  any individual line.
+- **Optional AI pass.** Repair, summarise, and extract terms, through a CLI you
+  configure.
 
-Releases are built by the **Release** workflow, run by hand from the Actions
-tab. It runs the same script with `UNIVERSAL=1`, signs with the Developer ID
-certificate held in the `release` environment, notarises with Apple, staples the
-ticket, and attaches a zip to a GitHub release. It needs five secrets:
-`CERTIFICATE_P12` and `CERTIFICATE_PASSWORD` (a base64 Developer ID
-Application `.p12`), and `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` (a
-base64 App Store Connect `.p8` and its identifiers).
+**Transcription is entirely local** — WhisperKit on Apple silicon, no account, no
+upload, and it works offline. The AI pass is the one exception, and it is opt-in:
+it hands the transcript to whichever command-line tool you point it at, and that
+tool decides where the text goes.
+
+## Install
+
+Download the latest `Intinya-x.y.z.zip` from [Releases](../../releases/latest),
+unzip it, and drag **Intinya** to Applications. Builds are signed with a
+Developer ID certificate and notarised by Apple, so Gatekeeper opens them without
+the right-click dance.
+
+Requires **macOS 14 (Sonoma) or later**. Apple silicon strongly recommended —
+transcription runs on the Neural Engine and GPU.
 
 ### Permissions
 
@@ -29,11 +44,40 @@ base64 App Store Connect `.p8` and its identifiers).
 | Microphone | Your side of the conversation | Prompted on first record |
 | Screen Recording | System audio (ScreenCaptureKit) | System Settings › Privacy & Security › Screen Recording |
 
+Recordings are written to `~/Library/Application Support/Meeting/Sessions/`.
+That folder keeps its original name so recordings made before the app was renamed
+are still found; it is storage, not branding.
+
+## Build from source
+
+```bash
+git clone <this repo> && cd intinya
+./Scripts/build-debug.sh       # builds and signs build/Intinya.app
+./Scripts/build-debug.sh --run # ...and relaunches it
+```
+
+Uses Xcode 26.3 via `DEVELOPER_DIR` when that version is installed, so
+`xcode-select` does not need changing.
+
 `build-debug.sh` signs with your **Developer ID** identity if it finds one. That
-matters more than it sounds: both grants are recorded against the code
+matters more than it sounds: both permission grants are recorded against the code
 signature, so an ad hoc build is a different app to macOS on every rebuild and
-re-prompts each time. With no identity on the machine the script falls back to
-ad hoc and says so.
+re-prompts each time. With no identity on the machine the script falls back to ad
+hoc and says so.
+
+### Releasing
+
+Releases are built by the **Release** workflow, run by hand from the Actions tab.
+It runs the same script with `UNIVERSAL=1`, signs with the Developer ID
+certificate held in the `release` environment, notarises with Apple, staples the
+ticket, and attaches a zip to a GitHub release. It needs five secrets:
+`CERTIFICATE_P12` and `CERTIFICATE_PASSWORD` (a base64 Developer ID Application
+`.p12`), and `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` (a base64 App
+Store Connect `.p8` and its identifiers).
+
+---
+
+The rest of this file is how the app works and why it is built the way it is.
 
 ## How it works
 
@@ -145,9 +189,9 @@ Indonesian voice, transcribes it, and reports realtime factor and word error
 rate. Hit **Measure** on any downloaded model, or from the terminal:
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --list-models
-./build/Meeting.app/Contents/MacOS/Meeting --benchmark openai_whisper-small
-./build/Meeting.app/Contents/MacOS/Meeting --benchmark small large-v3-v20240930_626MB
+./build/Intinya.app/Contents/MacOS/Intinya --list-models
+./build/Intinya.app/Contents/MacOS/Intinya --benchmark openai_whisper-small
+./build/Intinya.app/Contents/MacOS/Intinya --benchmark small large-v3-v20240930_626MB
 ```
 
 Measured on an M-series Mac:
@@ -181,8 +225,8 @@ live needs to beat realtime, enhanced does not.
 Run it headlessly over any past session:
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --enhance "~/Library/Application Support/Meeting/Sessions/<session>"
-./build/Meeting.app/Contents/MacOS/Meeting --enhance <dir> openai_whisper-large-v3
+./build/Intinya.app/Contents/MacOS/Intinya --enhance "~/Library/Application Support/Meeting/Sessions/<session>"
+./build/Intinya.app/Contents/MacOS/Intinya --enhance <dir> openai_whisper-large-v3
 ```
 
 Measured: 184s of Indonesian speech re-transcribed in 27.1s (**6.8× realtime**)
@@ -225,7 +269,7 @@ Both tracks are choosable, before you hit Record:
 List what is available, and check both permissions, with:
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --audio-sources
+./build/Intinya.app/Contents/MacOS/Intinya --audio-sources
 ```
 
 Input devices come from CoreAudio rather than `AVCaptureDevice`, because the
@@ -272,7 +316,7 @@ Target is either the whole display or a single window, listed from
 `SCShareableContent`. Check discovery and permissions with:
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --screens
+./build/Intinya.app/Contents/MacOS/Intinya --screens
 ```
 
 **Keyframes are the default, and for slide-driven meetings they are the better
@@ -335,7 +379,7 @@ computed incrementally, one frame at a time, and cached.
 Check it with:
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --chunkbench 600
+./build/Intinya.app/Contents/MacOS/Intinya --chunkbench 600
 ```
 
 Per-packet cost should stay flat as the duration grows:
@@ -362,10 +406,10 @@ The app now detects this: if a track produces exact zeros for 8 seconds while
 nominally recording, a warning banner appears. To check the microphone directly:
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --mictest 5
+./build/Intinya.app/Contents/MacOS/Intinya --mictest 5
 ```
 
-If it reports SILENT, remove Meeting from System Settings › Privacy & Security ›
+If it reports SILENT, remove Intinya from System Settings › Privacy & Security ›
 Microphone, relaunch, and approve the prompt again.
 
 Session WAV headers are also patched every ~5 seconds during capture, so a
@@ -395,8 +439,8 @@ is consumed by Claude Code itself.
 Roughly 20s for a short recording.
 
 ```bash
-./build/Meeting.app/Contents/MacOS/Meeting --polish "<sessionDir>" --dry-run
-./build/Meeting.app/Contents/MacOS/Meeting --polish "<sessionDir>"
+./build/Intinya.app/Contents/MacOS/Intinya --polish "<sessionDir>" --dry-run
+./build/Intinya.app/Contents/MacOS/Intinya --polish "<sessionDir>"
 ```
 
 ### Why a login shell is captured first
@@ -432,6 +476,9 @@ recording with crash-safe WAVs, the model picker with on-demand download and
 on-device benchmarking, selectable microphone and system-audio source, and
 silent-input detection.
 
+Since then: per-line annotations, a terms view showing which glossary entries a
+recording actually used, and a document-style playback layout.
+
 Not yet built:
 - Glossary editing in the UI (terms are learned automatically, but cannot yet be
   reviewed or removed by hand).
@@ -442,7 +489,7 @@ Not yet built:
 ## Layout
 
 ```
-Sources/Meeting/
+Sources/Intinya/
 ├── Audio/           capture, resampling, WAV writing
 ├── Transcription/   WhisperKit engine, VAD chunker, model list
 ├── Model/           recorder coordinator, segments, glossary

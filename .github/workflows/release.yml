@@ -43,7 +43,7 @@ jobs:
     environment: release
 
     env:
-      APP: build/Meeting.app
+      APP: build/Intinya.app
 
     steps:
       # Pinned to a commit rather than a tag: tags can be moved, and this job
@@ -163,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           Scripts/build-debug.sh
-          lipo -archs "$APP/Contents/MacOS/Meeting"
+          lipo -archs "$APP/Contents/MacOS/Intinya"
           codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "^Authority=Developer|TeamIdentifier|flags="
           # The number in the app and the number on the release have to agree.
           BUILT="$(defaults read "$PWD/$APP/Contents/Info.plist" CFBundleShortVersionString)"
@@ -196,8 +196,8 @@ jobs:
         run: |
           set -euo pipefail
           # ditto rather than zip, which does not preserve the signature.
-          ditto -c -k --keepParent --sequesterRsrc "$APP" "Meeting-$VERSION.zip"
-          shasum -a 256 "Meeting-$VERSION.zip"
+          ditto -c -k --keepParent --sequesterRsrc "$APP" "Intinya-$VERSION.zip"
+          shasum -a 256 "Intinya-$VERSION.zip"
 
       - name: Publish release
         env:
@@ -208,7 +208,7 @@ jobs:
             --title "v$VERSION" \
             --generate-notes \
             ${{ inputs.draft && '--draft' || '' }} \
-            "Meeting-$VERSION.zip"
+            "Intinya-$VERSION.zip"
 
       - name: Remove the keychain
         if: always()
