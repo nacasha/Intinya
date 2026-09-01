@@ -1,5 +1,0 @@
-{
-  "swift.buildArguments": ["-c", "release"],
-  "lldb.launch.terminal": "console",
-  "files.exclude": { "**/.build": true }
-}
