@@ -19,12 +19,24 @@ struct ScreenPlaybackView: View, Equatable {
     /// Supplied by the session transport, not created here — the video follows
     /// the same play/pause/seek as the audio.
     let videoPlayer: AVPlayer?
+    /// The line being spoken, shown over the picture as a subtitle.
+    ///
+    /// Resolved by the caller, so this view does not re-render on every
+    /// playback tick — only when the line actually changes.
+    var subtitle: String?
     var onSeek: ((TimeInterval) -> Void)?
 
     /// Ignores the closure, which is recreated on every parent render and would
     /// otherwise make the view look changed even when nothing is.
+    /// Every input that changes what is drawn has to be here.
+    ///
+    /// `.equatable()` makes this the whole truth: a field left out is a field
+    /// SwiftUI never sees change. `subtitle` was missing, so the caption was
+    /// whatever line happened to be playing when the pane first appeared and
+    /// never moved again.
     static func == (lhs: ScreenPlaybackView, rhs: ScreenPlaybackView) -> Bool {
         lhs.currentFile == rhs.currentFile
+            && lhs.subtitle == rhs.subtitle
             && lhs.hasVideo == rhs.hasVideo
             && lhs.directory == rhs.directory
             && lhs.keyframes.count == rhs.keyframes.count
@@ -32,12 +44,47 @@ struct ScreenPlaybackView: View, Equatable {
     }
 
     var body: some View {
-        if hasVideo {
-            videoPane
-        } else if !keyframes.isEmpty {
-            keyframePane
-        } else {
-            empty
+        Group {
+            if hasVideo {
+                videoPane
+            } else if !keyframes.isEmpty {
+                keyframePane
+            } else {
+                empty
+            }
+        }
+        .overlay(alignment: .bottom) { subtitleOverlay }
+    }
+
+    /// What is being said over what is being shown.
+    ///
+    /// Deliberately a caption rather than a transcript: one line, centred,
+    /// legible over any picture. Reading along happens in the transcript pane;
+    /// this is for watching.
+    @ViewBuilder
+    private var subtitleOverlay: some View {
+        if let subtitle, !subtitle.isEmpty, hasVideo || !keyframes.isEmpty {
+            Text(subtitle)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        // Dark rather than the app's surfaces: a subtitle sits
+                        // on whatever the screen happened to be showing, and
+                        // only a dark plate stays readable over all of it.
+                        .fill(Color.black.opacity(0.72))
+                }
+                .frame(maxWidth: 620)
+                .padding(.bottom, 18)
+                .padding(.horizontal, 20)
+                .transition(.opacity)
+                .animation(.smooth(duration: 0.18), value: subtitle)
+                .allowsHitTesting(false)
         }
     }
 
@@ -159,18 +206,11 @@ struct ScreenPlaybackView: View, Equatable {
     }
 
     private var empty: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "rectangle.slash")
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text("No screen capture")
-                .font(Theme.Font.title)
-                .foregroundStyle(.secondary)
-            Text("This session was recorded with audio only.")
-                .font(Theme.Font.body)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EmptyState(
+            systemImage: "rectangle.slash",
+            title: "No screen capture",
+            detail: "This recording was made without capturing the screen."
+        )
     }
 }
 
@@ -215,7 +255,9 @@ private struct PlayerView: NSViewRepresentable {
 ///
 /// `NSCache` evicts under memory pressure on its own, so this cannot grow
 /// unbounded across long sessions.
-private enum KeyframeCache {
+/// Shared: the timeline transcript loads frames too, and decoding the same PNG
+/// twice for two views on the same screen is pure waste.
+enum KeyframeCache {
     private static let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 400

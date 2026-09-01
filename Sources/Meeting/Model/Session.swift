@@ -123,6 +123,12 @@ struct SessionTranscript: Codable {
     /// Screen stills, when the session was recorded with keyframe capture.
     var keyframes: [ScreenCapture.Keyframe]?
     var screenMode: ScreenCaptureMode?
+    /// What actually recorded this, for the same reason the model names are
+    /// kept: months later, "why is this track quiet" is answered by knowing
+    /// which mic and which app it came from. Optional, so transcripts written
+    /// before source selection existed still decode.
+    var micDevice: String?
+    var systemAudioSource: String?
     var sections: [MeetingSection]?
     var typeID: UUID?
 

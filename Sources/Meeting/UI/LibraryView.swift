@@ -110,7 +110,7 @@ struct LibraryView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 520, minHeight: 420)
-        .background(.ultraThinMaterial)
+        .background(Theme.content)
         .ignoresSafeArea(.container, edges: .top)
     }
 
@@ -144,32 +144,34 @@ struct LibraryView: View {
                 }
                 .frame(maxWidth: 320)
 
-                HeaderActionMenu(
+                HeaderMenu(
                     title: filterName,
                     systemImage: "line.3.horizontal.decrease",
                     tint: filterTypeID.isEmpty ? nil : Theme.system,
-                    help: "Show only one meeting type"
-                ) {
-                    Button("All Types") { filterTypeID = "" }
-                    Divider()
-                    ForEach(meetingTypes.types) { type in
-                        Button {
+                    help: "Show only one meeting type",
+                    items: [
+                        .action("All Types", systemImage: "square.grid.2x2") { filterTypeID = "" },
+                        .separator,
+                    ] + meetingTypes.types.map { type in
+                        .action(type.name, systemImage: type.systemImage) {
                             filterTypeID = type.id.uuidString
-                        } label: {
-                            Label(type.name, systemImage: type.systemImage)
                         }
                     }
-                }
+                )
 
-                HeaderActionMenu(
+                HeaderMenu(
                     title: sort.label,
                     systemImage: "arrow.up.arrow.down",
-                    help: "Sort order"
-                ) {
-                    ForEach(Sort.allCases) { option in
-                        Button(option.label) { sortRaw = option.rawValue }
+                    help: "Sort order",
+                    items: Sort.allCases.map { option in
+                        .action(
+                            option.label,
+                            systemImage: option == sort ? "checkmark" : "circle"
+                        ) {
+                            sortRaw = option.rawValue
+                        }
                     }
-                }
+                )
 
                 HeaderAction(
                     title: hideEmpty ? "Hiding Empty" : "Showing All",

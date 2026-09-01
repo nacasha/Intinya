@@ -67,9 +67,16 @@ final class SessionStore: ObservableObject {
 
         let transcript = loadTranscript(in: directory)
 
-        // Prefer the recorded timestamp; fall back to the folder's mtime for
-        // sessions written before transcripts were persisted.
+        // Prefer the recorded timestamp, then the folder's own name, and only
+        // then its mtime.
+        //
+        // The name is the reliable fallback: it is stamped once at creation and
+        // never changes. The mtime is not — anything written into the folder
+        // moves it, so notes, AI output, or a cached waveform would silently
+        // redate a recording to whenever it was last opened. That is how six
+        // recordings from August ended up filed under today.
         let recordedAt = transcript?.recordedAt
+            ?? DateFormatter.sessionStamp.date(from: directory.lastPathComponent)
             ?? (try? directory.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
             ?? Date.distantPast
 

@@ -5,7 +5,10 @@ import SwiftUI
 /// A `Menu` and a `Button` are different controls with different default
 /// chrome, which is why the AI dropdown never matched its neighbours. Both now
 /// wear the same chip, so the row reads as one set.
-private struct ActionChip: View {
+/// Internal rather than private: `HeaderMenu` wears the same chip, and the whole
+/// point of that type is that a custom dropdown is indistinguishable from the
+/// buttons beside it.
+struct ActionChip: View {
     let title: String
     let systemImage: String
     /// Nil is the neutral treatment; a colour marks a primary action.
@@ -30,6 +33,11 @@ private struct ActionChip: View {
             Text(title)
                 .font(Theme.Font.caption)
                 .fontWeight(.medium)
+                .lineLimit(1)
+                // A chip is as wide as its label. Without this the row wraps
+                // "Copy" to "Co / py" the moment the window is narrow enough
+                // that the actions no longer fit side by side.
+                .fixedSize()
 
             if showsMenuIndicator {
                 Image(systemName: "chevron.down")
@@ -46,6 +54,7 @@ private struct ActionChip: View {
         .overlay {
             Capsule().stroke(border, lineWidth: 1)
         }
+        .fixedSize()
         .contentShape(Capsule())
         // Understated: these sit next to the recording title, so they should
         // respond without competing with it.
@@ -103,41 +112,61 @@ struct HeaderAction: View {
     }
 }
 
-/// A dropdown wearing the same chip as `HeaderAction`.
-struct HeaderActionMenu<Content: View>: View {
-    let title: String
-    let systemImage: String
-    var tint: Color?
-    var isBusy: Bool = false
-    var isEnabled: Bool = true
-    var help: String = ""
-    @ViewBuilder let content: () -> Content
+/// A two-way switch for the actions row.
+///
+/// Wears the same capsule language as `HeaderAction`, but inverted: the track
+/// is the recessed surface and the selected option is the raised one, so it
+/// reads as a choice between states rather than as two buttons that happen to
+/// sit together.
+struct HeaderSwitch<Value: Hashable>: View {
+    struct Option: Identifiable {
+        let value: Value
+        let title: String
+        let systemImage: String
+        var id: Value { value }
+    }
 
-    @State private var isHovering = false
+    let options: [Option]
+    @Binding var selection: Value
 
     var body: some View {
-        Menu {
-            content()
-        } label: {
-            ActionChip(
-                title: title,
-                systemImage: systemImage,
-                tint: tint,
-                isBusy: isBusy,
-                showsMenuIndicator: true,
-                isHovering: isHovering,
-                isEnabled: isEnabled
-            )
+        HStack(spacing: 2) {
+            ForEach(options) { option in
+                let isSelected = selection == option.value
+                Button {
+                    selection = option.value
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: option.systemImage)
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(option.title)
+                            .font(Theme.Font.caption)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                            // Without this the labels wrap a character per line
+                            // as soon as the actions row runs short of space,
+                            // collapsing the switch into an unreadable stack.
+                            .fixedSize()
+                    }
+                    .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background {
+                        if isSelected {
+                            Capsule()
+                                .fill(Theme.content)
+                                .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        // `.button` + `.plain` is what actually strips the Menu's own bezel;
-        // `.borderlessButton` still draws chrome around the label, which is why
-        // this control kept looking different from the buttons beside it.
-        .menuIndicator(.hidden)
-        .menuStyle(.button)
-        .buttonStyle(.plain)
+        .padding(2)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .overlay(Capsule().stroke(Color.primary.opacity(0.09), lineWidth: 1))
         .fixedSize()
-        .disabled(!isEnabled)
-        .onHover { isHovering = $0 }
-        .help(help)
+        .animation(.smooth(duration: 0.18), value: selection)
     }
 }

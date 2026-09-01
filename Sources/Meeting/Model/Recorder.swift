@@ -94,6 +94,63 @@ final class Recorder: ObservableObject {
         }
     }
 
+    // MARK: Audio sources
+
+    /// Chosen input, or nil to follow the system default.
+    @Published var micDevice: MicDevice?
+    @Published private(set) var micDevices: [MicDevice] = []
+    @Published var systemSource: SystemAudioSource = .systemWide
+    @Published private(set) var systemSources: [SystemAudioSource] = [.systemWide]
+
+    /// Persisted by UID, never by `AudioDeviceID` — see `MicDevice`. Unlike
+    /// `screenTarget`, which is a per-meeting choice deliberately left transient,
+    /// these describe your hardware setup and should survive a relaunch.
+    @AppStorage("capture.micDeviceUID") private var savedMicUID = ""
+    @AppStorage("capture.systemSource") private var savedSystemSourceID = ""
+
+    func refreshAudioSources() async {
+        micDevices = AudioDevices.inputs()
+        // Recover if the chosen interface has been unplugged: fall back to the
+        // system default rather than recording silence from a device that is gone.
+        if let device = micDevice, !micDevices.contains(where: { $0.uid == device.uid }) {
+            micDevice = nil
+            savedMicUID = ""
+        }
+
+        systemSources = await SystemAudioCapture.availableSources()
+        if !systemSources.contains(where: { $0.id == systemSource.id }) {
+            systemSource = .systemWide
+            savedSystemSourceID = ""
+        }
+    }
+
+    /// Restores the persisted choices. Called once at launch.
+    func restoreAudioSources() async {
+        micDevices = AudioDevices.inputs()
+        micDevice = AudioDevices.resolve(uid: savedMicUID)
+
+        systemSources = await SystemAudioCapture.availableSources()
+        systemSource = systemSources.first { $0.id == savedSystemSourceID } ?? .systemWide
+    }
+
+    func useMicDevice(_ device: MicDevice?) {
+        guard !isRecording else { return }
+        micDevice = device
+        savedMicUID = device?.uid ?? ""
+    }
+
+    func useSystemSource(_ source: SystemAudioSource) {
+        guard !isRecording else { return }
+        systemSource = source
+        savedSystemSourceID = source.isSystemWide ? "" : source.id
+    }
+
+    /// What the mic chip shows. The default input is named rather than labelled
+    /// "Default", so the chip always says what is actually being recorded.
+    var micLabel: String {
+        micDevice?.name ?? AudioDevices.defaultInput()?.name ?? "No mic"
+    }
+
     private var startedAt: Date?
     /// Recorded seconds completed before the current run segment.
     ///
@@ -341,11 +398,24 @@ final class Recorder: ObservableObject {
             }
         }
         do {
-            try mic.start()
+            try mic.start(device: micDevice)
             micActive = true
         } catch {
             micActive = false
             errorMessage = error.localizedDescription
+
+            // A chosen device that will not open must not cost you the mic
+            // track when there is a working default sitting right there. Retry
+            // once unscoped, and say so rather than silently changing input.
+            if micDevice != nil {
+                do {
+                    try mic.start(device: nil)
+                    micActive = true
+                    errorMessage = "\(error.localizedDescription) Recording from the default input instead."
+                } catch {
+                    micActive = false
+                }
+            }
         }
 
         // System audio — this is the half that needs Screen Recording.
@@ -359,10 +429,22 @@ final class Recorder: ObservableObject {
             }
         }
         do {
-            try await system.start()
+            try await system.start(source: systemSource)
             systemActive = true
         } catch {
             errorMessage = error.localizedDescription
+
+            // Same reasoning as the mic: if the chosen app has quit, fall back
+            // to capturing everything rather than losing the track entirely.
+            if !systemSource.isSystemWide {
+                do {
+                    try await system.start(source: .systemWide)
+                    systemActive = true
+                    errorMessage = "\(error.localizedDescription) Capturing all system audio instead."
+                } catch {
+                    systemActive = false
+                }
+            }
         }
 
         guard micActive || systemActive else {
@@ -507,6 +589,8 @@ final class Recorder: ObservableObject {
             enhancedModel: nil,
             keyframes: screen.keyframes.isEmpty ? nil : screen.keyframes,
             screenMode: screenMode == .off ? nil : screenMode,
+            micDevice: micLabel,
+            systemAudioSource: systemSource.isSystemWide ? nil : systemSource.title,
             sections: sections.isEmpty ? nil : sections.chronological,
             typeID: meetingTypeID
         )

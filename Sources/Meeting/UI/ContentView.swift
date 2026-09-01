@@ -1,40 +1,61 @@
 import SwiftUI
 
 struct ContentView: View {
+    /// Which half of the session the pane is showing.
+    ///
+    /// The same switch playback uses. It replaces the accordion, which made you
+    /// trade one for the other, and the "Meeting" title, which named the app in
+    /// the middle of the app.
+    private enum Pane: Hashable {
+        case transcript
+        case notes
+    }
+
     @EnvironmentObject private var recorder: Recorder
     @EnvironmentObject private var store: ModelStore
     @State private var showingModels = false
     @State private var showingScreenPicker = false
+    @State private var showingAudioPicker = false
+    /// Width of the detail pane, for capping the bottom bar.
+    @State private var paneWidth: CGFloat = 0
+    @State private var pane: Pane = .transcript
     @StateObject private var notes = NotesDocument()
     @EnvironmentObject private var meetingTypes: MeetingTypeStore
     @EnvironmentObject private var activity: ActivityCenter
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            // Fixed, like playback's: always present, so its space is not worth
+            // taking back.
+            compactHeader
+                // Topmost, so a dropdown hanging out of the header is not
+                // painted over by what comes after it in this stack.
+                .zIndex(2)
             Divider().opacity(0.5)
-            AccordionStack(panels: panels, storageKey: "record")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .zIndex(1)
 
-            // Sits directly above the Record button it is blocking, rather than
-            // at the far end of the window from it.
-            if !recorder.missingPermissions.isEmpty {
-                Divider().opacity(0.5)
-                PermissionBanner(
-                    permissions: recorder.missingPermissions,
-                    message: recorder.permissionMessage ?? ""
-                )
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
-            }
-            footer
+            // Everything else floats over the page: the bar, the fade, and the
+            // bands that come and go. The page runs to the foot of the window
+            // and scrolls beneath them, the same as playback.
+            pageContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .bottomFade(height: Theme.barClearance)
+                .overlay(alignment: .bottom) { footer }
+                .overlay(alignment: .top) { statusBands }
         }
         // Must declare that it fills the split-view detail pane. Without this a
         // detail pane that momentarily resolves to zero size renders blank and
         // then settles into a broken layout.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 520, minHeight: 420)
-        .background(.ultraThinMaterial)
+        .background(Theme.content)
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { paneWidth = geometry.size.width }
+                    .onChange(of: geometry.size.width) { _, width in paneWidth = width }
+            }
+        }
         .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: $showingModels) {
             ModelPickerView().environmentObject(store)
@@ -42,11 +63,15 @@ struct ContentView: View {
         .sheet(isPresented: $showingScreenPicker) {
             ScreenCapturePicker().environmentObject(recorder)
         }
+        .sheet(isPresented: $showingAudioPicker) {
+            AudioSourcePicker().environmentObject(recorder)
+        }
         // onAppear, not .task: loading is owned by the recorder so that a
         // re-render cannot cancel it. Both calls are idempotent.
         .onAppear {
             recorder.useModel(store.liveModel)
             recorder.refreshPermissions()
+            Task { await recorder.restoreAudioSources() }
             notes.load(recorder.lastSessionDirectory)
             if recorder.meetingTypeID == nil, let last = meetingTypes.lastUsed {
                 recorder.useMeetingType(last)
@@ -67,70 +92,106 @@ struct ContentView: View {
         }
     }
 
-    /// Notes above the transcript, matching the playback layout.
-    private var panels: [AccordionPanel] {
-        [
-            AccordionPanel(
-                id: "notes",
-                title: "Notes",
-                systemImage: "note.text",
-                badge: notes.savedLabel,
-                accent: .orange
-            ) {
-                NotesView(document: notes, hasSession: recorder.lastSessionDirectory != nil)
-            },
-            AccordionPanel(
-                id: "transcript",
-                title: "Transcript",
-                systemImage: "text.bubble",
-                badge: sectionBadge,
-                accent: Theme.mic
-            ) {
-                TranscriptView(
-                    segments: recorder.orderedSegments,
-                    isRecording: recorder.isRecording,
-                    onEdit: { recorder.updateSegment($0, text: $1) },
-                    sections: recorder.sections,
-                    onAddSection: recorder.isRecording || !recorder.segments.isEmpty
-                        ? { recorder.addSection(titled: "Section \(recorder.sections.count + 1)", at: $0) }
-                        : nil,
-                    onRenameSection: { recorder.renameSection($0, to: $1) },
-                    onDeleteSection: { recorder.removeSection($0) },
-                    pending: recorder.pending
-                )
-                .equatable()
-            },
-        ]
-    }
+    /// One pane at a time, on the same reading column as playback.
+    @ViewBuilder
+    private var pageContent: some View {
+        switch pane {
+        case .transcript:
+            TranscriptView(
+                segments: recorder.orderedSegments,
+                isRecording: recorder.isRecording,
+                onEdit: { recorder.updateSegment($0, text: $1) },
+                sections: recorder.sections,
+                onAddSection: recorder.isRecording || !recorder.segments.isEmpty
+                    ? { recorder.addSection(titled: "Section \(recorder.sections.count + 1)", at: $0) }
+                    : nil,
+                onRenameSection: { recorder.renameSection($0, to: $1) },
+                onDeleteSection: { recorder.removeSection($0) },
+                pending: recorder.pending,
+                bottomClearance: Theme.barClearance
+            )
+            .equatable()
 
-    private var sectionBadge: String? {
-        var parts: [String] = []
-        if !recorder.segments.isEmpty { parts.append("\(recorder.segments.count) lines") }
-        if !recorder.sections.isEmpty { parts.append("\(recorder.sections.count) sections") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        case .notes where recorder.lastSessionDirectory == nil:
+            NotesView(document: notes, hasSession: false)
+
+        case .notes:
+            GeometryReader { geometry in
+                SlimScrollView {
+                    NotesView(
+                        document: notes,
+                        hasSession: recorder.lastSessionDirectory != nil,
+                        // No heading on this pane, so the editor takes all of it
+                        // bar the paddings.
+                        minimumHeight: max(240, geometry.size.height - 60 - Theme.barClearance)
+                    )
+                    .measure()
+                    .padding(.bottom, Theme.barClearance)
+                }
+            }
+        }
     }
 
     private var activeType: MeetingType? {
         meetingTypes.type(id: recorder.meetingTypeID)
     }
 
-    private var screenButton: some View {
-        Button {
-            showingScreenPicker = true
-        } label: {
-            CaptureChip(
-                title: recorder.screenMode == .off
-                    ? "NO SCREEN"
-                    : (recorder.screenTarget?.title ?? recorder.screenMode.label).uppercased(),
-                systemImage: recorder.screenMode.systemImage,
-                tint: recorder.screenActive ? Theme.system : nil
-            )
+    /// Both audio chips open the same sheet — picking a mic and picking what
+    /// system audio to listen to is one decision, made at the same moment.
+    private var micButton: some View {
+        BarButton(
+            systemImage: "mic.fill",
+            tint: recorder.micActive && !recorder.isPaused ? Theme.mic : nil,
+            isEnabled: !recorder.isRecording,
+            showsMenuIndicator: false,
+            tooltip: recorder.isRecording
+                ? "Stop recording to change the microphone"
+                : "Recording from \(recorder.micLabel)"
+        ) {
+            showingAudioPicker = true
         }
-        .buttonStyle(.plain)
-        .disabled(recorder.isRecording)
-        .help(recorder.isRecording
-              ? "Stop recording to change screen capture"
-              : "Choose what to capture from the screen")
+    }
+
+    private var systemButton: some View {
+        BarButton(
+            systemImage: "speaker.wave.2.fill",
+            tint: recorder.systemActive && !recorder.isPaused ? Theme.system : nil,
+            isEnabled: !recorder.isRecording,
+            tooltip: recorder.isRecording
+                ? "Stop recording to change the system audio source"
+                : "Capturing \(recorder.systemSource.title)"
+        ) {
+            showingAudioPicker = true
+        }
+    }
+
+    private var screenButton: some View {
+        BarButton(
+            systemImage: recorder.screenMode.systemImage,
+            tint: recorder.screenActive ? Theme.system : nil,
+            isEnabled: !recorder.isRecording,
+            tooltip: recorder.isRecording
+                ? "Stop recording to change screen capture"
+                : screenHelp
+        ) {
+            showingScreenPicker = true
+        }
+    }
+
+    /// Names the target, since the chip itself is only an icon now.
+    private var screenHelp: String {
+        guard recorder.screenMode != .off else {
+            return "Not capturing the screen"
+        }
+        let target = recorder.screenTarget?.title ?? recorder.screenMode.label
+        return "Capturing \(target) as \(recorder.screenMode.label.lowercased())"
+    }
+
+    /// Half the pane, with a floor so the controls are never crushed together
+    /// on a narrow window.
+    private var barWidth: CGFloat? {
+        guard paneWidth > 0 else { return nil }
+        return max(520, paneWidth * 0.5)
     }
 
     private var timerColor: Color {
@@ -140,53 +201,78 @@ struct ContentView: View {
 
     // MARK: Header
 
-    private var header: some View {
-        VStack(spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Meeting")
-                        .font(Theme.Font.display)
-                    Text(recorder.status)
-                        .font(Theme.Font.body)
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.opacity)
-                }
-                Spacer()
-                HStack(spacing: 10) {
-                    if recorder.isPaused {
-                        Text("PAUSED")
-                            .font(Theme.Font.label)
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Capsule().fill(Color.orange.opacity(0.16)))
-                    }
-                    ElapsedLabel(monitor: recorder.monitor, color: timerColor)
-                }
+    /// One row, matching playback: pane switch and state on the left, the
+    /// actions on the right.
+    private var compactHeader: some View {
+        HStack(spacing: 10) {
+            HeaderSwitch(
+                options: [
+                    .init(value: Pane.transcript, title: "Transcript", systemImage: "text.alignleft"),
+                    .init(value: Pane.notes, title: "Notes", systemImage: "note.text"),
+                ],
+                selection: $pane
+            )
+
+            if recorder.isRecording {
+                // Small and beside the status, where playback puts its own
+                // clock. The 44pt timer this replaces was the loudest thing on
+                // the screen, and the sidebar's Record button now carries the
+                // same count anywhere in the app.
+                ElapsedLabel(monitor: recorder.monitor, color: timerColor)
             }
 
-            HStack(spacing: 10) {
-                HeaderActionMenu(
-                    title: activeType?.name ?? "No Type",
-                    systemImage: activeType?.systemImage ?? "square.grid.2x2",
-                    help: "Decides how the AI summarises this meeting, and preselects screen capture"
-                ) {
-                    ForEach(meetingTypes.types) { type in
-                        Button {
-                            recorder.useMeetingType(type)
-                            meetingTypes.noteUsed(type)
-                        } label: {
-                            Label(type.name, systemImage: type.systemImage)
-                        }
-                    }
-                    Divider()
-                    Button("No Type") { recorder.useMeetingType(nil) }
-                }
-
-                LiveAIMenu(runner: activity.ai(for: ActivityCenter.liveKey))
-
-                Spacer()
+            if recorder.isPaused {
+                Text("PAUSED")
+                    .font(Theme.Font.label)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.orange.opacity(0.16)))
             }
 
+            Spacer(minLength: 12)
+
+            LiveAIMenu(runner: activity.ai(for: ActivityCenter.liveKey))
+
+            HeaderMenu(
+                title: activeType?.name ?? "No Type",
+                systemImage: activeType?.systemImage ?? "square.grid.2x2",
+                help: "Decides how the AI summarises this meeting, and preselects screen capture",
+                items: meetingTypes.types.map { type in
+                    .action(type.name, systemImage: type.systemImage) {
+                        recorder.useMeetingType(type)
+                        meetingTypes.noteUsed(type)
+                    }
+                } + [
+                    .separator,
+                    .action("No Type", systemImage: "slash.circle") {
+                        recorder.useMeetingType(nil)
+                    },
+                ]
+            )
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
+    /// Transient state — AI output, errors, the permission warning.
+    ///
+    /// A band over the page rather than a row in the stack, so it does not push
+    /// the transcript down as it comes and goes. Same treatment playback gives
+    /// its own status strip.
+    private var statusBands: some View {
+        VStack(spacing: 0) {
+            if !recorder.missingPermissions.isEmpty {
+                PermissionBanner(
+                    permissions: recorder.missingPermissions,
+                    message: recorder.permissionMessage ?? ""
+                )
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                Divider().opacity(0.5)
+            }
+
+            if hasStatus {
+                VStack(alignment: .leading, spacing: 10) {
             if let answer = activity.ai(for: ActivityCenter.liveKey).panelAnswer {
                 AIAnswerPanel(
                     title: activity.ai(for: ActivityCenter.liveKey).panelTitle,
@@ -212,49 +298,48 @@ struct ContentView: View {
             if let message = recorder.errorMessage {
                 ErrorBanner(message: message)
             }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                Divider().opacity(0.5)
+            }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 14)
-        .padding(.bottom, 14)
+        .background(Theme.content)
+    }
+
+    private var hasStatus: Bool {
+        activity.ai(for: ActivityCenter.liveKey).panelAnswer != nil
+            || activity.ai(for: ActivityCenter.liveKey).error != nil
+            || recorder.errorMessage != nil
     }
 
     // MARK: Footer
 
     private var footer: some View {
-        HStack {
-            Button {
+        HStack(spacing: 8) {
+            BarButton(
+                systemImage: "cube.box",
+                tooltip: recorder.isModelReady
+                    ? "Transcribing with \(recorder.activeModel.displayName)"
+                    : "Preparing the transcription model…"
+            ) {
                 showingModels = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "cube.box")
-                        .font(.system(size: 10))
-                    Text(recorder.isModelReady
-                         ? "\(recorder.activeModel.displayName) · id"
-                         : "Preparing model…")
-                        .font(Theme.Font.caption)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(Color.primary.opacity(0.06)))
             }
-            .buttonStyle(.plain)
-            .help("Choose transcription model")
 
             if recorder.modelFailed {
-                Button { recorder.retryModel() } label: {
-                    CaptureChip(
-                        title: "RETRY",
-                        systemImage: "arrow.clockwise",
-                        tint: .orange
-                    )
+                BarButton(
+                    systemImage: "arrow.clockwise",
+                    title: "Retry",
+                    tint: .orange,
+                    tooltip: recorder.errorMessage ?? "Try loading the model again"
+                ) {
+                    recorder.retryModel()
                 }
-                .buttonStyle(.plain)
-                .help(recorder.errorMessage ?? "Try loading the model again")
             }
 
-            TrackBadge(source: .mic, isActive: recorder.micActive && !recorder.isPaused)
-            TrackBadge(source: .system, isActive: recorder.systemActive && !recorder.isPaused)
+            micButton
+            systemButton
             screenButton
 
             if recorder.keyframeCount > 0 {
@@ -269,117 +354,36 @@ struct ContentView: View {
                 systemActive: recorder.systemActive && !recorder.isPaused
             )
             .frame(height: 26)
-            .frame(minWidth: 80)
-            .layoutPriority(-1)
+            .frame(minWidth: 48, maxWidth: .infinity)
             .padding(.horizontal, 4)
 
             if recorder.isRecording {
-                PauseButton(isPaused: recorder.isPaused) {
+                BarButton(
+                    systemImage: recorder.isPaused ? "play.fill" : "pause.fill",
+                    title: recorder.isPaused ? "Resume" : "Pause",
+                    tint: .orange,
+                    // Filled while paused, mirroring Stop: a filled capsule
+                    // always means "this state is currently active".
+                    isProminent: recorder.isPaused
+                ) {
                     recorder.togglePause()
                 }
             }
 
-            RecordButton(
-                isRecording: recorder.isRecording,
-                isEnabled: recorder.isModelReady && recorder.missingPermissions.isEmpty
+            BarButton(
+                systemImage: recorder.isRecording ? "stop.fill" : "record.circle",
+                title: recorder.isRecording ? "Stop" : "Record",
+                tint: Theme.recording,
+                isProminent: recorder.isRecording,
+                isEnabled: recorder.isModelReady && recorder.missingPermissions.isEmpty,
+                tooltip: recorder.missingPermissions.isEmpty
+                    ? ""
+                    : (recorder.permissionMessage ?? "")
             ) {
                 recorder.toggleRecording()
             }
-            .help(recorder.missingPermissions.isEmpty
-                  ? ""
-                  : recorder.permissionMessage ?? "")
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .background(.regularMaterial)
-    }
-}
-
-struct RecordButton: View {
-    let isRecording: Bool
-    let isEnabled: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                ZStack {
-                    Circle()
-                        .fill(isRecording ? Color.white : Theme.recording)
-                        .frame(width: isRecording ? 10 : 13, height: isRecording ? 10 : 13)
-                        .clipShape(RoundedRectangle(cornerRadius: isRecording ? 2 : 7, style: .continuous))
-                }
-                .frame(width: 14, height: 14)
-
-                Text(isRecording ? "Stop" : "Record")
-                    .font(Theme.Font.title)
-            }
-            .foregroundStyle(isRecording ? .white : .primary)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background {
-                Capsule()
-                    .fill(isRecording ? Theme.recording : Color.primary.opacity(isHovering ? 0.12 : 0.07))
-            }
-            .overlay {
-                Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.5)
-        .scaleEffect(isHovering && isEnabled ? 1.03 : 1)
-        .onHover { isHovering = $0 }
-        .animation(.smooth(duration: 0.2), value: isRecording)
-        .animation(.smooth(duration: 0.2), value: isHovering)
-        .keyboardShortcut("r", modifiers: [.command])
-    }
-}
-
-/// Pause/Resume, built to the same shape as `RecordButton`.
-///
-/// Matching the transport button matters: these two sit side by side and both
-/// change the recording state, so a small bordered control next to a large
-/// capsule read as unrelated things.
-struct PauseButton: View {
-    let isPaused: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    private var tint: Color { .orange }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 14, height: 14)
-
-                Text(isPaused ? "Resume" : "Pause")
-                    .font(Theme.Font.title)
-            }
-            // Filled while paused, mirroring Stop: a filled capsule always means
-            // "this state is currently active".
-            .foregroundStyle(isPaused ? AnyShapeStyle(.white) : AnyShapeStyle(tint))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background {
-                Capsule().fill(isPaused ? tint : tint.opacity(isHovering ? 0.22 : 0.14))
-            }
-            .overlay {
-                Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .scaleEffect(isHovering ? 1.03 : 1)
-        .onHover { isHovering = $0 }
-        .animation(.smooth(duration: 0.2), value: isPaused)
-        .animation(.smooth(duration: 0.2), value: isHovering)
-        .keyboardShortcut("p", modifiers: [.command])
-        .help(isPaused ? "Resume recording" : "Pause without ending the recording")
+        .floatingBar(maxWidth: barWidth)
     }
 }
 

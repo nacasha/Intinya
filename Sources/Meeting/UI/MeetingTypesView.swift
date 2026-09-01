@@ -18,7 +18,7 @@ struct MeetingTypesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 640, minHeight: 420)
-        .background(.ultraThinMaterial)
+        .background(Theme.content)
         .ignoresSafeArea(.container, edges: .top)
         .onAppear {
             if selectedID == nil { selectedID = store.types.first?.id }

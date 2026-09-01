@@ -68,6 +68,15 @@ else
 fi
 lipo -archs "$APP/Contents/MacOS/Meeting" | sed 's/^/    /'
 
+# Regenerated only when the artwork is newer, so a normal build pays nothing.
+if [ -f Resources/AppIcon.png ] && \
+   { [ ! -f Resources/Meeting.icns ] || [ Resources/AppIcon.png -nt Resources/Meeting.icns ]; }; then
+    sh Scripts/make-icon.sh
+fi
+if [ -f Resources/Meeting.icns ]; then
+    cp Resources/Meeting.icns "$APP/Contents/Resources/Meeting.icns"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,6 +86,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key>       <string>Meeting</string>
     <key>CFBundleIdentifier</key>        <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>        <string>Meeting</string>
+    <key>CFBundleIconFile</key>          <string>Meeting</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key>           <string>$BUILD_NUMBER</string>

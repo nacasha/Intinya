@@ -55,7 +55,7 @@ struct BulkSessionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 520, minHeight: 420)
-        .background(.ultraThinMaterial)
+        .background(Theme.content)
         .ignoresSafeArea(.container, edges: .top)
     }
 
@@ -73,22 +73,18 @@ struct BulkSessionView: View {
             }
 
             HStack(spacing: 10) {
-                HeaderActionMenu(
+                HeaderMenu(
                     title: "Set Type",
                     systemImage: "square.grid.2x2",
                     tint: Theme.system,
-                    help: "Assign a meeting type to all of these at once"
-                ) {
-                    ForEach(meetingTypes.types) { type in
-                        Button {
-                            onAssignType(type)
-                        } label: {
-                            Label(type.name, systemImage: type.systemImage)
-                        }
-                    }
-                    Divider()
-                    Button("No Type") { onAssignType(nil) }
-                }
+                    help: "Assign a meeting type to all of these at once",
+                    items: meetingTypes.types.map { type in
+                        .action(type.name, systemImage: type.systemImage) { onAssignType(type) }
+                    } + [
+                        .separator,
+                        .action("No Type", systemImage: "slash.circle") { onAssignType(nil) },
+                    ]
+                )
 
                 HeaderAction(
                     title: "Delete",

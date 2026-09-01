@@ -42,7 +42,7 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 520, minHeight: 420)
-        .background(.ultraThinMaterial)
+        .background(Theme.content)
         .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: $showingModels) {
             ModelPickerView().environmentObject(models)
@@ -315,27 +315,22 @@ private struct RolePicker: View {
 
             Spacer(minLength: 12)
 
-            HeaderActionMenu(
+            HeaderMenu(
                 title: current.displayName,
                 systemImage: "cube.box",
                 tint: isReady ? nil : .orange,
-                help: detail
-            ) {
-                if choices.isEmpty {
-                    Text("No models downloaded")
-                } else {
-                    ForEach(choices) { model in
-                        Button {
+                help: detail,
+                items: choices.isEmpty
+                    ? [.info("No models downloaded")]
+                    : choices.map { model in
+                        .action(
+                            "\(model.displayName) — \(model.expectedLive.label)",
+                            systemImage: model == current ? "checkmark" : "cube.box"
+                        ) {
                             onSelect(model)
-                        } label: {
-                            Label(
-                                "\(model.displayName) — \(model.expectedLive.label)",
-                                systemImage: model == current ? "checkmark" : "cube.box"
-                            )
                         }
                     }
-                }
-            }
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)

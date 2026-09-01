@@ -13,30 +13,26 @@ struct LiveAIMenu: View {
     private var hasTranscript: Bool { !recorder.segments.isEmpty }
 
     var body: some View {
-        HeaderActionMenu(
-            title: runner.isRunning ? (runner.running?.title ?? "Working") : "AI",
+        HeaderMenu(
+            title: "AI",
             systemImage: "sparkles",
             tint: Theme.system,
             isBusy: runner.isRunning,
             isEnabled: !runner.isRunning && hasTranscript,
             help: hasTranscript
                 ? "Run an AI action on what has been transcribed so far"
-                : "Nothing transcribed yet"
-        ) {
-            ForEach(AIAction.live) { action in
-                Button {
+                : "Nothing transcribed yet",
+            items: AIAction.live.map { action in
+                .action(action.title, systemImage: action.systemImage) {
                     if action.needsInput != nil {
                         userInput = ""
                         promptingAction = action
                     } else {
                         run(action)
                     }
-                } label: {
-                    Label(action.title, systemImage: action.systemImage)
                 }
-                .help(action.detail)
             }
-        }
+        )
         .sheet(item: $promptingAction) { action in
             LiveInputPrompt(action: action, text: $userInput) { run(action) }
         }

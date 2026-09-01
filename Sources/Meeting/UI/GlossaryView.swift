@@ -30,7 +30,7 @@ struct GlossaryView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 520, minHeight: 420)
-        .background(.ultraThinMaterial)
+        .background(Theme.content)
         .ignoresSafeArea(.container, edges: .top)
     }
 

@@ -77,6 +77,12 @@ struct MeetingApp: App {
                 .environmentObject(glossaryStore)
                 .environmentObject(meetingTypeStore)
                 .environmentObject(activityCenter)
+                // The chips, sidebar rows and transcript controls are all custom
+                // shapes, so AppKit's focus ring lands as a rounded rectangle
+                // that traces none of them. Set once here rather than per
+                // button: this reads through the environment, so it covers
+                // sheets and anything added later.
+                .focusEffectDisabled()
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)

@@ -12,28 +12,25 @@ struct AIActionsMenu: View {
     @State private var userInput = ""
 
     var body: some View {
-        HeaderActionMenu(
-            title: runner.isRunning ? "Working" : "AI",
+        HeaderMenu(
+            // The label never changes. A button that renames itself mid-action
+            // moves the row and makes you re-find the control you just pressed;
+            // the spinner in place of the icon already says it is working.
+            title: "AI",
             systemImage: "sparkles",
-            tint: Theme.system,
             isBusy: runner.isRunning,
             isEnabled: !runner.isRunning && session.hasTranscript,
             help: session.hasTranscript
                 ? "Run an AI action on this recording"
-                : "This recording has no transcript yet"
-        ) {
-            Button {
-                runner.run(AIAction.runAll, session: session, glossary: glossary,
-                           meetingType: meetingTypes.type(id: session.typeID), onFinish: onFinish)
-            } label: {
-                Label("Run All", systemImage: "wand.and.stars")
-            }
-            .help("Repair, summarise, and extract terms, in that order.")
-
-            Divider()
-
-            ForEach(AIAction.all) { action in
-                Button {
+                : "This recording has no transcript yet",
+            items: [
+                .action("Run All", systemImage: "wand.and.stars") {
+                    runner.run(AIAction.runAll, session: session, glossary: glossary,
+                               meetingType: meetingTypes.type(id: session.typeID), onFinish: onFinish)
+                },
+                .separator,
+            ] + AIAction.all.map { action in
+                .action(action.title, systemImage: action.systemImage) {
                     if action.needsInput != nil {
                         userInput = ""
                         promptingAction = action
@@ -42,12 +39,9 @@ struct AIActionsMenu: View {
                                    meetingType: meetingTypes.type(id: session.typeID),
                                    onFinish: onFinish)
                     }
-                } label: {
-                    Label(action.title, systemImage: action.systemImage)
                 }
-                .help(action.detail)
             }
-        }
+        )
         .sheet(item: $promptingAction) { action in
             InputPrompt(action: action, text: $userInput) {
                 runner.run([action], userInput: userInput, session: session,

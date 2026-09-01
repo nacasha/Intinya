@@ -45,37 +45,3 @@ struct WaveformView: View {
     }
 }
 
-/// Shows unambiguously which sources are being captured. For a recording app
-/// this is a trust requirement, not decoration.
-struct TrackBadge: View {
-    let source: AudioSource
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: source == .mic ? "mic.fill" : "speaker.wave.2.fill")
-                .font(.system(size: 9, weight: .bold))
-            Text(source == .mic ? "MIC" : "SYSTEM")
-                .font(Theme.Font.label)
-                .tracking(0.6)
-        }
-        .foregroundStyle(isActive ? Theme.accent(for: source) : .secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background {
-            Capsule().fill(
-                isActive
-                    ? Theme.accent(for: source).opacity(0.16)
-                    : Color.primary.opacity(0.05)
-            )
-        }
-        .overlay {
-            Capsule().stroke(
-                isActive ? Theme.accent(for: source).opacity(0.35) : .clear,
-                lineWidth: 1
-            )
-        }
-        .opacity(isActive ? 1 : 0.55)
-        .animation(.smooth(duration: 0.25), value: isActive)
-    }
-}

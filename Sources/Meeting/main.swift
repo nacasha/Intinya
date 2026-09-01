@@ -18,6 +18,8 @@ if CommandLine.arguments.contains("--benchmark") {
     ChunkBenchCLI.main()
 } else if CommandLine.arguments.contains("--screens") {
     ScreenCLI.main()
+} else if CommandLine.arguments.contains("--audio-sources") {
+    AudioSourceCLI.main()
 } else if CommandLine.arguments.contains("--polish") {
     PolishCLI.main()
 } else {

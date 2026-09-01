@@ -36,6 +36,13 @@ struct TranscriptSegment: Identifiable, Codable, Hashable {
     var end: TimeInterval
     var text: String
     var tier: TranscriptTier
+    /// A note written against this line.
+    ///
+    /// Optional so transcripts written before annotations existed still decode.
+    /// Held on the segment rather than in a side file so it travels with the
+    /// line it belongs to — the enhanced pass rewrites `text` in place on the
+    /// same id, so a note survives re-transcription without any remapping.
+    var note: String?
 
     init(
         id: UUID = UUID(),
@@ -43,7 +50,8 @@ struct TranscriptSegment: Identifiable, Codable, Hashable {
         start: TimeInterval,
         end: TimeInterval,
         text: String,
-        tier: TranscriptTier = .live
+        tier: TranscriptTier = .live,
+        note: String? = nil
     ) {
         self.id = id
         self.source = source
@@ -51,6 +59,7 @@ struct TranscriptSegment: Identifiable, Codable, Hashable {
         self.end = end
         self.text = text
         self.tier = tier
+        self.note = note
     }
 
     var duration: TimeInterval { max(0, end - start) }

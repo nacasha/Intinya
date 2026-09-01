@@ -213,6 +213,51 @@ switches. Plain markdown on disk rather than a field inside the transcript JSON:
 notes are the part a person writes by hand and should stay readable without this
 app.
 
+## Audio sources
+
+Both tracks are choosable, before you hit Record:
+
+| Track | Choices |
+|---|---|
+| **Microphone** | System default, or any input device with usable channels |
+| **System audio** | All system audio, or a single application |
+
+List what is available, and check both permissions, with:
+
+```bash
+./build/Meeting.app/Contents/MacOS/Meeting --audio-sources
+```
+
+Input devices come from CoreAudio rather than `AVCaptureDevice`, because the
+`AudioDeviceID` is what has to be set on the engine's audio unit anyway, and
+because the input channel count is readable *before* selecting a device. That
+last part matters: an aggregate or virtual device can advertise a sample rate
+while exposing no input channels at all, and enumerating through CoreAudio lets
+those be filtered out of the list instead of discovered by failing at record time.
+
+The device is set with `kAudioOutputUnitProperty_CurrentDevice` on
+`engine.inputNode.audioUnit`, which is the only way to point `AVAudioEngine` at
+something other than the system default, and only works while the engine is
+stopped. Nothing downstream changes: `AudioResampler` rebuilds its converter
+whenever the input format changes, so a 44.1 kHz interface and a 48 kHz one both
+arrive as 16 kHz mono.
+
+**App audio captures helper processes too.** Chromium and Electron apps play
+audio from a helper, not from the process that owns the window — Chrome's audio
+is `com.google.Chrome.helper.renderer`, not `com.google.Chrome`. Selecting an app
+therefore includes every running process whose bundle ID is the chosen one or is
+namespaced under it. Matching only the parent is why per-app capture records
+silence on Chrome, Slack, Discord, Teams and VS Code, which is most of the apps a
+meeting actually runs in.
+
+Scoping to an app also *excludes* everything else, notification sounds included.
+That is the point, but it means all-system is the safer default and per-app is
+the sharp tool.
+
+If a chosen mic is unplugged or a chosen app has quit, recording does not fail:
+it falls back to the default input or to all-system audio and says so, rather
+than silently capturing nothing.
+
 ## Screen capture
 
 Chosen per recording, before you hit Record:
@@ -384,7 +429,8 @@ or a changed flag — never requires a code change here.
 Tiers 1 and 2 are complete and verified: dual-track capture, VAD-gated live
 transcription pinned to Indonesian, the enhanced re-transcription pass, session
 recording with crash-safe WAVs, the model picker with on-demand download and
-on-device benchmarking, and silent-input detection.
+on-device benchmarking, selectable microphone and system-audio source, and
+silent-input detection.
 
 Not yet built:
 - Glossary editing in the UI (terms are learned automatically, but cannot yet be

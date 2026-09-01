@@ -83,13 +83,15 @@ struct RootView: View {
             // Pinned: the destinations stay reachable however far down the
             // recordings you have scrolled.
             VStack(spacing: 2) {
-                SidebarNavRow(
-                    title: "Record",
-                    systemImage: recorder.isRecording ? "record.circle.fill" : "mic.circle",
-                    tint: recorder.isRecording ? Theme.recording : nil,
-                    indicator: recorder.isRecording ? Theme.recording : nil,
-                    isSelected: route == .record
+                RecordNavButton(
+                    isSelected: route == .record,
+                    isRecording: recorder.isRecording,
+                    isPaused: recorder.isPaused,
+                    monitor: recorder.monitor
                 ) { route = .record; selection.removeAll() }
+                // Set apart from the destinations below it, so it reads as the
+                // app's action rather than the first of five places to go.
+                .padding(.bottom, 6)
 
                 SidebarNavRow(
                     title: "All Recordings",
@@ -317,7 +319,12 @@ struct RootView: View {
                 SessionDetailView(
                     session: session,
                     ai: activity.ai(for: session.id),
-                    enhancer: activity.enhancer(for: session.id)
+                    enhancer: activity.enhancer(for: session.id),
+                    // Routed back here rather than deleted in place: the
+                    // confirmation, the route reset, and forgetting any running
+                    // activity all live in `confirmDelete`, and a second copy
+                    // of that in the detail view would be one to keep in step.
+                    onDelete: { pendingDelete = [$0] }
                 )
                 .id(session.id)
             } else {

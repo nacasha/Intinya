@@ -1,4 +1,6 @@
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 
 /// Captures the default input device via AVAudioEngine and emits 16 kHz mono.
 final class MicCapture {
@@ -13,19 +15,46 @@ final class MicCapture {
 
     private var configurationObserver: NSObjectProtocol?
 
-    func start() throws {
+    /// Starts capture, optionally from a specific input device.
+    ///
+    /// `nil` follows the system default input, which is the original behaviour
+    /// and the fallback when a previously chosen device has been unplugged.
+    func start(device: MicDevice? = nil) throws {
         guard !isRunning else { return }
+
+        let input = engine.inputNode
+
+        // Point the engine at the chosen device before anything reads a format
+        // from it. `AVAudioEngine` has no API for this — the device lives on the
+        // input node's underlying audio unit, and it can only be set while the
+        // engine is stopped.
+        if let device {
+            var deviceID = device.id
+            let status = AudioUnitSetProperty(
+                input.audioUnit!,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &deviceID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            guard status == noErr else {
+                throw CaptureError.deviceUnavailable(device.name)
+            }
+        }
 
         // Every check below has to happen *before* `installTap`. That method
         // raises an Objective-C exception on a bad format, and an ObjC exception
         // is not catchable by Swift `try` — it unwinds straight past the caller's
         // error handling, which is how a failure here ended up aborting the whole
         // start sequence with no message.
-        guard AVCaptureDevice.default(for: .audio) != nil else {
+        //
+        // These validate whatever the engine is *now* pointed at, which is why
+        // they run after the device is set rather than before.
+        guard device != nil || AVCaptureDevice.default(for: .audio) != nil else {
             throw CaptureError.noInputDevice
         }
 
-        let input = engine.inputNode
         let hardware = input.inputFormat(forBus: 0)
         let format = input.outputFormat(forBus: 0)
 
@@ -36,7 +65,7 @@ final class MicCapture {
               format.channelCount > 0, format.sampleRate > 0
         else {
             throw CaptureError.invalidInputFormat(
-                describe(device: AVCaptureDevice.default(for: .audio))
+                device?.name ?? describe(device: AVCaptureDevice.default(for: .audio))
             )
         }
 
@@ -101,20 +130,24 @@ final class MicCapture {
 enum CaptureError: LocalizedError {
     case noInputDevice
     case invalidInputFormat(String)
+    case deviceUnavailable(String)
     case noDisplayAvailable
     case screenRecordingDenied
     case windowGone
     case videoUnavailable
+    case appGone(String)
 
     var errorDescription: String? {
         switch self {
         case .noInputDevice:
-            return "No microphone is available. Connect one, or choose an input in "
-                 + "System Settings › Sound › Input."
+            return "No microphone is available. Connect one, then pick it from the mic chip."
         case .invalidInputFormat(let device):
             return "\(device) reports no usable input channels, so it cannot be recorded. "
-                 + "This usually means an aggregate or virtual audio device is selected — "
-                 + "pick a real microphone in System Settings › Sound › Input."
+                 + "This usually means an aggregate or virtual audio device — "
+                 + "pick a real microphone from the mic chip."
+        case .deviceUnavailable(let device):
+            return "\(device) could not be opened. It may have been unplugged or taken by "
+                 + "another app — pick a different microphone from the mic chip."
         case .noDisplayAvailable:
             return "No display available to attach the system audio capture to."
         case .screenRecordingDenied:
@@ -124,6 +157,9 @@ enum CaptureError: LocalizedError {
             return "That window has closed. Pick another capture target."
         case .videoUnavailable:
             return "Screen video recording requires macOS 15 or later. Keyframes work on macOS 14."
+        case .appGone(let name):
+            return "\(name) is no longer running, so its audio cannot be captured. "
+                 + "Pick another source, or switch back to all system audio."
         }
     }
 }
