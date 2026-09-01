@@ -2,21 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "Meeting",
+    name: "Intinya",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Meeting", targets: ["Meeting"])
+        .executable(name: "Intinya", targets: ["Intinya"])
     ],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.1.0")
     ],
     targets: [
         .executableTarget(
-            name: "Meeting",
+            name: "Intinya",
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit")
             ],
-            path: "Sources/Meeting",
+            path: "Sources/Intinya",
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]

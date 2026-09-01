@@ -59,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
-struct MeetingApp: App {
+struct IntinyaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var recorder = Recorder()
     @StateObject private var modelStore = ModelStore()
@@ -69,7 +69,7 @@ struct MeetingApp: App {
     @StateObject private var activityCenter = ActivityCenter()
 
     var body: some Scene {
-        Window("Meeting", id: "main") {
+        Window("Intinya", id: "main") {
             RootView()
                 .environmentObject(recorder)
                 .environmentObject(modelStore)

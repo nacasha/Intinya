@@ -10,6 +10,9 @@ final class SessionStore: ObservableObject {
 
     nonisolated static var root: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        // "Meeting", not "Intinya", after the rename. The recordings already on
+        // disk live under this path, and changing it would not migrate them —
+        // it would hide them. The folder name is storage, not branding.
             .appendingPathComponent("Meeting/Sessions", isDirectory: true)
     }
 

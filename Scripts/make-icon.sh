@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Builds Resources/Meeting.icns from Resources/AppIcon.png.
+# Builds Resources/Intinya.icns from Resources/AppIcon.png.
 #
 # Separate from the build script because it only needs to run when the artwork
 # changes, and because the .icns is committed: contributors without the source
@@ -17,8 +17,8 @@ set -eu
 cd "$(dirname "$0")/.."
 
 SRC="Resources/AppIcon.png"
-OUT="Resources/Meeting.icns"
-SET="$(mktemp -d)/Meeting.iconset"
+OUT="Resources/Intinya.icns"
+SET="$(mktemp -d)/Intinya.iconset"
 
 [ -f "$SRC" ] || { echo "missing $SRC" >&2; exit 1; }
 

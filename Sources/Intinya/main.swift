@@ -2,7 +2,7 @@ import Foundation
 
 // Custom entry point so the app can also run headless.
 //
-//   Meeting.app/Contents/MacOS/Meeting --benchmark [variant ...]
+//   Intinya.app/Contents/MacOS/Intinya --benchmark [variant ...]
 //
 // Benchmarking from the terminal is useful on its own — comparing four models
 // means four multi-minute model loads, which is a bad fit for a modal sheet.
@@ -23,5 +23,5 @@ if CommandLine.arguments.contains("--benchmark") {
 } else if CommandLine.arguments.contains("--polish") {
     PolishCLI.main()
 } else {
-    MeetingApp.main()
+    IntinyaApp.main()
 }

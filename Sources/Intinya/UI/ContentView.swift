@@ -4,8 +4,8 @@ struct ContentView: View {
     /// Which half of the session the pane is showing.
     ///
     /// The same switch playback uses. It replaces the accordion, which made you
-    /// trade one for the other, and the "Meeting" title, which named the app in
-    /// the middle of the app.
+    /// trade one for the other, and the app-name title that sat where it is now
+    /// — naming the app in the middle of the app.
     private enum Pane: Hashable {
         case transcript
         case notes
