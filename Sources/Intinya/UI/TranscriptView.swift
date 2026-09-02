@@ -25,17 +25,27 @@ struct TranscriptView: View, Equatable {
 
     /// Chunks still decoding, per track. Each becomes a placeholder chip.
     var pending: [AudioSource: Int] = [:]
-    /// Room to leave at the foot for a bar floating over the feed.
+    /// Provisional text for the utterance still being spoken, per track.
+    /// Shown dimmed in place of that track's placeholder until the real
+    /// segment replaces it.
+    var partials: [AudioSource: TranscriptSegment] = [:]
+    /// Room to leave for the bar and the bands floating over the feed.
     ///
-    /// Not in `==`: it is fixed by the caller and never changes, so comparing
-    /// it would only cost a field.
+    /// Not in `==`: set by the caller from measured chrome, and a change there
+    /// already re-renders this view through its other inputs.
     var bottomClearance: CGFloat = 0
+    var topClearance: CGFloat = 0
+
+    /// Room the follow toggle needs above the bar, and that the feed leaves
+    /// below its last line so the two never overlap.
+    private static let followReserve: CGFloat = 44
 
     static func == (lhs: TranscriptView, rhs: TranscriptView) -> Bool {
         lhs.activeID == rhs.activeID
             && lhs.isRecording == rhs.isRecording
             && lhs.isPlaying == rhs.isPlaying
             && lhs.pending == rhs.pending
+            && lhs.partials == rhs.partials
             && lhs.sections == rhs.sections
             && lhs.segments == rhs.segments
     }
@@ -54,9 +64,9 @@ struct TranscriptView: View, Equatable {
     /// and hang on while you were trying to read.
     @AppStorage("transcript.autoScroll") private var autoScroll = true
 
-    /// Whether any chunk is still decoding.
+    /// Whether any chunk is still decoding or previewing.
     private var hasPending: Bool {
-        pending.values.contains { $0 > 0 }
+        pending.values.contains { $0 > 0 } || !partials.isEmpty
     }
 
     var body: some View {
@@ -65,7 +75,7 @@ struct TranscriptView: View, Equatable {
                 systemImage: isRecording ? "waveform" : "text.bubble",
                 title: isRecording ? "Listening…" : "Start recording to transcribe",
                 detail: isRecording
-                    ? "Text appears once the first sentence finishes."
+                    ? "Words appear as you speak."
                     : "Bahasa Indonesia, with English terms preserved."
             )
         } else {
@@ -75,34 +85,91 @@ struct TranscriptView: View, Equatable {
 
     private var feed: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(segments) { segment in
-                        row(for: segment)
-                    }
+            // The same scroll view playback uses, so both screens get the
+            // floating thumb instead of one system scroller and one custom one.
+            SlimScrollView {
+                // A plain stack, not a lazy one. `TimelineTranscript` is itself
+                // a `LazyVStack`, and nesting two of them leaves the outer one
+                // estimating the height of an inner one that has not built its
+                // rows yet — which is what threw the scroll to the top and the
+                // bottom as the feed grew. Laziness still comes from the inner
+                // stack, where the rows actually are.
+                VStack(alignment: .leading, spacing: 0) {
+                    // The same rows playback draws: timeline rail, timestamp
+                    // gutter, hover controls. The two screens showed the same
+                    // transcript in two different shapes, which made moving
+                    // between them feel like moving between two apps.
+                    //
+                    // What stays local to recording is everything about a feed
+                    // in motion — following the newest line, the placeholders
+                    // for what has not arrived, and the switch that governs it.
+                    TimelineTranscript(
+                        segments: segments,
+                        sections: sections,
+                        keyframes: [],
+                        directory: URL(fileURLWithPath: "/"),
+                        activeID: nil,
+                        onSeek: onSeek.map { seek in { time in
+                            if let match = segments.last(where: { $0.start <= time }) { seek(match) }
+                        } },
+                        onEdit: onEdit,
+                        onAddSection: onAddSection,
+                        onRenameSection: onRenameSection,
+                        onDeleteSection: onDeleteSection
+                    )
+                    .equatable()
 
                     ForEach(AudioSource.allCases, id: \.self) { source in
-                        ForEach(0..<(pending[source] ?? 0), id: \.self) { index in
-                            GhostLine(source: source, seed: index)
+                        // The preview *is* that track's placeholder, with the
+                        // words so far in it; bars only show when there is
+                        // decoding but no preview text yet.
+                        if let partial = partials[source] {
+                            PartialLine(segment: partial)
                                 .transition(.opacity)
+                        } else {
+                            ForEach(0..<(pending[source] ?? 0), id: \.self) { index in
+                                GhostLine(source: source, seed: index)
+                                    .transition(.opacity)
+                            }
                         }
                     }
+                    // Placeholders fade where they stand.
+                    //
+                    // The fade was always there; what made one look like it
+                    // slid away was the line arriving above it, whose insertion
+                    // animated every placeholder downward at the same moment.
+                    // Opting them out of that animation leaves the new line to
+                    // animate in while the placeholder it replaces simply goes.
+                    .animation(nil, value: segments.count)
 
-                    // Where auto-scroll scrolls to.
+                    // The clearance *is* the anchor, rather than a 1pt marker
+                    // after it. Two reasons, both of which had this landing
+                    // short of the bottom:
+                    //
+                    // Anything placed after the anchor — padding on the stack,
+                    // or a spacer — is content the scroll never reaches, so the
+                    // feed settles that far above the end.
+                    //
+                    // And a 1pt view is a poor target inside a `LazyVStack`,
+                    // which only builds what is near the viewport: scrolling to
+                    // something that thin, and not yet built, lands on an
+                    // estimate. A block this tall is always resolved.
                     Color.clear
-                        .frame(height: 1)
+                        .frame(height: bottomClearance + Self.followReserve)
                         .id(Self.bottomAnchor)
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                .padding(.bottom, bottomClearance)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // The same reading column playback uses, rather than the full
+                // width of the pane — otherwise the two screens set the same
+                // transcript to two different measures.
+                .measure()
+                .padding(.top, topClearance)
             }
             // Keyed on count, not the array: animating on `segments` re-diffs
             // every row whenever any row changes, which gets expensive on a long
             // transcript while live text is still arriving.
             .animation(.smooth(duration: 0.28), value: segments.count)
             .animation(.smooth(duration: 0.2), value: pending)
+            .animation(.smooth(duration: 0.2), value: partials)
             .onAppear { rebuildSectionMap() }
             .onChange(of: segments.count) { _, _ in
                 rebuildSectionMap()
@@ -111,6 +178,7 @@ struct TranscriptView: View, Equatable {
             // The decoding placeholders occupy space too, so they push the end of
             // the transcript down exactly as a finished line does.
             .onChange(of: pending) { _, _ in follow(proxy) }
+            .onChange(of: partials) { _, _ in follow(proxy) }
             .onChange(of: sections) { _, _ in rebuildSectionMap() }
             .onChange(of: activeID) { _, id in
                 guard isPlaying, let id else { return }
@@ -120,7 +188,11 @@ struct TranscriptView: View, Equatable {
             }
             // Playback has its own scrolling, driven by the line being spoken, so
             // the toggle would have nothing to control there.
-            .overlay(alignment: .bottomTrailing) {
+            //
+            // Centred above the bar rather than tucked into the corner: it is
+            // about the feed as a whole, and the corner is where the scrollbar
+            // and the last line's controls already are.
+            .overlay(alignment: .bottom) {
                 // Placeholders count as content: the first thing you see in a
                 // new recording is a placeholder, and that is exactly when you
                 // might want to turn following off.
@@ -130,32 +202,6 @@ struct TranscriptView: View, Equatable {
             }
             .animation(.smooth(duration: 0.15), value: autoScroll)
         }
-    }
-
-    @ViewBuilder
-    private func row(for segment: TranscriptSegment) -> some View {
-        ForEach(sectionMap[segment.id] ?? []) { section in
-            SectionHeader(
-                section: section,
-                onRename: onRenameSection.map { rename in { rename(section, $0) } },
-                onDelete: onDeleteSection.map { delete in { delete(section) } }
-            )
-            .id(section.id)
-        }
-
-        SegmentRow(
-            segment: segment,
-            isActive: segment.id == activeID,
-            onPlay: onSeek.map { seek in { seek(segment) } },
-            onAddSection: onAddSection.map { add in { add(segment.start) } },
-            onEdit: onEdit.map { edit in { edit(segment, $0) } }
-        )
-        .equatable()
-        .id(segment.id)
-        .transition(.asymmetric(
-            insertion: .opacity.combined(with: .offset(y: 6)),
-            removal: .opacity
-        ))
     }
 
     private static let bottomAnchor = "transcript-bottom"
@@ -186,8 +232,7 @@ struct TranscriptView: View, Equatable {
             )
         }
         .buttonStyle(.plain)
-        .padding(.trailing, 16)
-        .padding(.bottom, 12)
+        .padding(.bottom, bottomClearance)
         .help(autoScroll
               ? "Following new lines — click to stop"
               : "Not following — click to jump to the newest line and keep up")
@@ -234,294 +279,51 @@ struct TranscriptView: View, Equatable {
 
 }
 
-// MARK: - Row
-
-/// One transcript line: timestamp, then text.
+/// The utterance still being spoken, decoded provisionally.
 ///
-/// Both speakers share a single left-aligned column. Chat-style bubbles pushed
-/// half the conversation to the right edge, which made a long meeting hard to
-/// scan and wasted most of the width on an ultrawide display. Reading down one
-/// column is what a transcript is for.
-private struct SegmentRow: View, Equatable {
+/// Same columns as `GhostLine` and `TimelineRow`, so when the real segment
+/// replaces this the words stay where they were. Dimmed and cursor-tailed
+/// because the tail is allowed to be wrong: it re-decodes every refresh and
+/// firms up when the utterance closes.
+private struct PartialLine: View {
     let segment: TranscriptSegment
-    var isActive: Bool = false
-    var onPlay: (() -> Void)?
-    var onAddSection: (() -> Void)?
-    var onEdit: ((String) -> Void)?
 
-    /// Closures cannot be compared, so they are matched on availability only.
-    /// Each one captures nothing but `segment` and a parent callback that is
-    /// fixed for the lifetime of the transcript, so equal inputs here really do
-    /// mean an identical row. Without this, one new line while recording
-    /// re-renders every line already on screen.
-    static func == (lhs: SegmentRow, rhs: SegmentRow) -> Bool {
-        lhs.segment == rhs.segment
-            && lhs.isActive == rhs.isActive
-            && (lhs.onPlay == nil) == (rhs.onPlay == nil)
-            && (lhs.onAddSection == nil) == (rhs.onAddSection == nil)
-            && (lhs.onEdit == nil) == (rhs.onEdit == nil)
-    }
-
-    @State private var isHovering = false
-    @State private var isEditing = false
-    @State private var draft = ""
-
-    /// Fixed so every line's text starts at the same x, which is what makes a
-    /// wrapped line hang under the text instead of under the timestamp.
-    private static let timeColumn: CGFloat = 46
-    private static let gutter: CGFloat = 92
-    /// A readable measure. Full-window lines on a wide display are hard to
-    /// track back to the start of the next one.
-    private static let measure: CGFloat = 780
-
-    private var isMic: Bool { segment.source == .mic }
+    private static let gutter: CGFloat = 52
+    private static let rail: CGFloat = 9
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .top, spacing: 0) {
             Text(segment.start.clockString)
                 .font(Theme.Font.caption)
-                .monospacedDigit()
-                .foregroundStyle(isActive ? AnyShapeStyle(Theme.system) : AnyShapeStyle(.tertiary))
-                .frame(width: Self.timeColumn, alignment: .leading)
-
-            if isEditing { editor } else { line }
-
-            Spacer(minLength: 0)
-
-            // Holds the gutter open so the text never runs under the controls.
-            // Width only — the controls themselves are an overlay, see below.
-            Color.clear
-                .frame(width: Self.gutter, height: 0)
-        }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 8)
-        // An overlay rather than a column, so the row is sized by the timestamp
-        // and the text alone and hovering cannot change its height.
-        //
-        // As a column this shifted every line below it. Reserving the same
-        // height for both states was not enough: the stack is
-        // `.firstTextBaseline`-aligned, an empty placeholder is aligned by its
-        // bottom edge, and the controls are SF Symbols, which carry a real text
-        // baseline. Two different baselines put the row's top edge in two
-        // different places even at identical heights.
-        // Top-aligned, not centred: a line that wraps to three rows would
-        // otherwise float its controls down beside the middle of the paragraph,
-        // where the baseline alignment used to keep them beside the first line.
-        .overlay(alignment: .topTrailing) {
-            // Still built only on hover: permanently mounting them at zero
-            // opacity meant every line on screen carried four live buttons and
-            // their help strings, for a control nobody is looking at.
-            if isHovering && !isEditing {
-                actions.padding(.trailing, 8)
-            }
-        }
-        .background {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(rowFill)
-        }
-        .overlay(alignment: .leading) {
-            // A slim bar rather than a border: it marks the active line without
-            // boxing it in, which would reintroduce the chip look.
-            if isActive {
-                Capsule()
-                    .fill(Theme.system)
-                    .frame(width: 2)
-                    .padding(.vertical, 2)
-            }
-        }
-        .onHover { isHovering = $0 }
-        .animation(.smooth(duration: 0.12), value: isHovering)
-        .animation(.smooth(duration: 0.2), value: isActive)
-    }
-
-    private var rowFill: Color {
-        if isActive { return Theme.system.opacity(0.12) }
-        if isHovering { return Color.primary.opacity(0.04) }
-        return .clear
-    }
-
-    private var line: some View {
-        (speaker + Text(segment.text))
-            .font(Theme.Font.body)
-            .foregroundStyle(segment.tier == .live ? .secondary : .primary)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: Self.measure, alignment: .leading)
-    }
-
-    /// Only the microphone track is labelled. Everything else is the meeting, and
-    /// prefixing every other line would be noise.
-    private var speaker: Text {
-        isMic
-            ? Text("You: ").foregroundColor(Theme.mic).fontWeight(.semibold)
-            : Text("")
-    }
-
-    private var editor: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            TextEditor(text: $draft)
-                .font(Theme.Font.body)
-                .scrollContentBackground(.hidden)
-                .frame(height: 80)
-                .padding(6)
-                .background {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Theme.system.opacity(0.4), lineWidth: 1)
-                }
-
-            HStack(spacing: 6) {
-                Button("Cancel") { isEditing = false }.controlSize(.small)
-                Button("Save") {
-                    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty, trimmed != segment.text { onEdit?(trimmed) }
-                    isEditing = false
-                }
-                .controlSize(.small)
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .frame(maxWidth: Self.measure, alignment: .leading)
-    }
-
-    private var actions: some View {
-        HStack(spacing: 2) {
-            if let onPlay {
-                ActionButton(icon: "play.fill", help: "Play from \(segment.start.clockString)", action: onPlay)
-            }
-            if let onAddSection {
-                ActionButton(icon: "text.insert", help: "Start a section here", action: onAddSection)
-            }
-            if onEdit != nil {
-                ActionButton(icon: "pencil", help: "Edit this line") {
-                    draft = segment.text
-                    isEditing = true
-                }
-            }
-            ActionButton(icon: "doc.on.doc", help: "Copy this line") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(segment.text, forType: .string)
-            }
-        }
-    }
-}
-
-private struct ActionButton: View {
-    let icon: String
-    let help: String
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(hovering ? AnyShapeStyle(Theme.system) : AnyShapeStyle(.secondary))
-                .frame(width: 21, height: 21)
-                .background {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.primary.opacity(hovering ? 0.10 : 0.04))
-                }
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(help)
-    }
-}
-
-// MARK: - Sections
-
-private struct SectionHeader: View {
-    let section: MeetingSection
-    let onRename: ((String) -> Void)?
-    let onDelete: (() -> Void)?
-
-    @State private var isEditing = false
-    @State private var draft = ""
-    @State private var hovering = false
-
-    /// Matches `SegmentRow`, so a section's own time sits in the same column as
-    /// every transcript timestamp and its title starts where the text does.
-    private static let timeColumn: CGFloat = 46
-
-    var body: some View {
-        Group {
-            if isEditing { editingRow } else { displayRow }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 10)
-        .onHover { hovering = $0 }
-    }
-
-    private var displayRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(section.start.clockString)
-                .font(Theme.Font.caption)
-                .monospacedDigit()
-                .foregroundStyle(Theme.system.opacity(0.8))
-                .frame(width: Self.timeColumn, alignment: .leading)
-
-            Text(section.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.system)
-                .lineLimit(1)
-
-            if hovering {
-                if onRename != nil {
-                    ActionButton(icon: "pencil", help: "Rename section") {
-                        draft = section.title
-                        isEditing = true
-                    }
-                }
-                if let onDelete {
-                    ActionButton(icon: "trash", help: "Delete section", action: onDelete)
-                }
-            }
-
-            // Fills whatever is left, so the rule always reaches the edge.
-            Rectangle()
-                .fill(Theme.system.opacity(0.22))
-                .frame(height: 1)
-        }
-        // Fixed, so revealing the controls cannot shift the lines below.
-        .frame(height: 22)
-    }
-
-    private var editingRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(section.start.clockString)
-                .font(Theme.Font.caption)
-                .monospacedDigit()
                 .foregroundStyle(.tertiary)
-                .frame(width: Self.timeColumn, alignment: .leading)
+                .frame(width: Self.gutter, alignment: .leading)
+                .padding(.top, 3)
 
-            TextField("Section name", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 280)
-                .onSubmit(commit)
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
+                .frame(width: Self.rail)
+                .padding(.horizontal, 14)
 
-            Button("Save", action: commit).controlSize(.small)
-            Button("Cancel") { isEditing = false }.controlSize(.small)
+            (Text(segment.text).foregroundStyle(.secondary)
+                + Text(" ▍").foregroundStyle(Theme.accent(for: segment.source).opacity(0.7)))
+                .font(Theme.Font.body)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
         }
-    }
-
-    private func commit() {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { onRename?(trimmed) }
-        isEditing = false
+        .padding(.bottom, 22)
+        .accessibilityLabel(segment.source == .mic
+            ? "Transcribing your side: \(segment.text)"
+            : "Transcribing the meeting: \(segment.text)")
     }
 }
 
 /// A placeholder for a line still being transcribed.
 ///
-/// Occupies the same two columns as a real line, so text lands exactly where the
-/// eye is already resting rather than shifting when it arrives.
+/// Laid out on `TimelineRow`'s columns — same gutter, same rail, same text
+/// origin — so the words land exactly where the eye is already resting instead
+/// of shifting when they arrive.
 private struct GhostLine: View {
     let source: AudioSource
     /// Varies the bar widths so consecutive placeholders don't look identical.
@@ -532,39 +334,42 @@ private struct GhostLine: View {
 
     /// Fractions of the text measure, deliberately uneven: equal bars read as a
     /// progress bar rather than as sentences waiting to appear.
-    ///
-    /// Relative rather than the fixed pixel widths this used to carry, which
-    /// overhung a narrow window and looked stranded on a wide one.
     private var widths: [CGFloat] {
         [[0.92, 0.54], [0.71], [0.96, 0.78, 0.38], [0.61]][abs(seed) % 4]
     }
 
-    /// Matches `SegmentRow`, so text lands exactly where the placeholder sat
-    /// rather than shifting when it arrives.
-    private static let timeColumn: CGFloat = 46
-    private static let measure: CGFloat = 780
+    private static let gutter: CGFloat = 52
+    private static let rail: CGFloat = 9
+    private static let measure: CGFloat = 620
 
     var body: some View {
         bars
             .overlay { sweep }
-            .padding(.vertical, 3)
-            .padding(.horizontal, 8)
+            .padding(.bottom, 22)
+            .accessibilityLabel(source == .mic ? "Transcribing your side" : "Transcribing the meeting")
             .onAppear {
                 guard !reduceMotion else { return }
                 withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
                     phase = 1.4
                 }
             }
-            .accessibilityLabel(source == .mic ? "Transcribing your side" : "Transcribing the meeting")
     }
 
     private var bars: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 0) {
             Capsule()
                 .fill(.tertiary)
                 .frame(width: 26, height: 8)
-                .frame(width: Self.timeColumn, alignment: .leading)
+                .frame(width: Self.gutter, alignment: .leading)
                 .padding(.top, 3)
+
+            // The rail runs through the placeholder too, so the line does not
+            // break where the transcript has not caught up yet.
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
+                .frame(width: Self.rail)
+                .padding(.horizontal, 14)
 
             VStack(alignment: .leading, spacing: 7) {
                 ForEach(Array(widths.enumerated()), id: \.offset) { _, fraction in
@@ -579,13 +384,6 @@ private struct GhostLine: View {
         }
     }
 
-    /// A band travelling left to right, masked to the bars.
-    ///
-    /// Built from `primary` rather than white so it reads the same in both
-    /// appearances — a white sweep is invisible on a light background. It
-    /// replaces a pulse of the whole row's opacity, which dimmed the timestamp
-    /// column in step with the text and made the whole line look like it was
-    /// fading out rather than loading.
     @ViewBuilder
     private var sweep: some View {
         if reduceMotion {

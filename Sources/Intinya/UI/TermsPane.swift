@@ -7,8 +7,13 @@ import SwiftUI
 /// there is nowhere to see which of them this recording is the source of, or
 /// where in it they were said. This is that read side.
 struct TermsPane: View {
-    let segments: [TranscriptSegment]
-    let terms: [String]
+    /// Matched once by the caller and held, not recomputed here.
+    ///
+    /// `body` runs on every playback tick. Scanning the glossary against the
+    /// transcript from inside it meant thousands of regex matches twenty times
+    /// a second, for an answer that only changes when the transcript or the
+    /// glossary does.
+    let occurrences: [Occurrence]
     var onSeek: ((TimeInterval) -> Void)?
 
     /// A term and every line that says it.
@@ -37,7 +42,7 @@ struct TermsPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Self.occurrences(in: segments, terms: terms)) { occurrence in
+            ForEach(occurrences) { occurrence in
                 row(occurrence)
             }
         }

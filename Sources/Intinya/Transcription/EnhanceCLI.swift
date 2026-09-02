@@ -22,7 +22,7 @@ enum EnhanceCLI {
 
         let model = rest.dropFirst().first.flatMap { name in
             WhisperModel(rawValue: name) ?? WhisperModel.allCases.first { $0.rawValue.contains(name) }
-        } ?? .defaultEnhanced
+        } ?? .defaultLive
 
         let directory = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         var failed = false

@@ -19,6 +19,9 @@ struct ContentView: View {
     /// Width of the detail pane, for capping the bottom bar.
     @State private var paneWidth: CGFloat = 0
     @State private var pane: Pane = .transcript
+    /// Height of the bands floating over the top of the page, so the page can
+    /// leave room for whatever is currently there.
+    @State private var bandsHeight: CGFloat = 0
     @StateObject private var notes = NotesDocument()
     @EnvironmentObject private var meetingTypes: MeetingTypeStore
     @EnvironmentObject private var activity: ActivityCenter
@@ -108,7 +111,9 @@ struct ContentView: View {
                 onRenameSection: { recorder.renameSection($0, to: $1) },
                 onDeleteSection: { recorder.removeSection($0) },
                 pending: recorder.pending,
-                bottomClearance: Theme.barClearance
+                partials: recorder.partials,
+                bottomClearance: Theme.barClearance,
+                topClearance: bandsHeight
             )
             .equatable()
 
@@ -123,9 +128,10 @@ struct ContentView: View {
                         hasSession: recorder.lastSessionDirectory != nil,
                         // No heading on this pane, so the editor takes all of it
                         // bar the paddings.
-                        minimumHeight: max(240, geometry.size.height - 60 - Theme.barClearance)
+                        minimumHeight: max(240, geometry.size.height - 60 - bandsHeight - Theme.barClearance)
                     )
                     .measure()
+                    .padding(.top, bandsHeight)
                     .padding(.bottom, Theme.barClearance)
                 }
             }
@@ -194,11 +200,6 @@ struct ContentView: View {
         return max(520, paneWidth * 0.5)
     }
 
-    private var timerColor: Color {
-        if recorder.isPaused { return .orange }
-        return recorder.isRecording ? Theme.recording : .secondary
-    }
-
     // MARK: Header
 
     /// One row, matching playback: pane switch and state on the left, the
@@ -212,14 +213,6 @@ struct ContentView: View {
                 ],
                 selection: $pane
             )
-
-            if recorder.isRecording {
-                // Small and beside the status, where playback puts its own
-                // clock. The 44pt timer this replaces was the loudest thing on
-                // the screen, and the sidebar's Record button now carries the
-                // same count anywhere in the app.
-                ElapsedLabel(monitor: recorder.monitor, color: timerColor)
-            }
 
             if recorder.isPaused {
                 Text("PAUSED")
@@ -251,7 +244,7 @@ struct ContentView: View {
             )
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .frame(height: Theme.headerHeight)
     }
 
     /// Transient state — AI output, errors, the permission warning.
@@ -306,6 +299,13 @@ struct ContentView: View {
             }
         }
         .background(Theme.content)
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { bandsHeight = geometry.size.height }
+                    .onChange(of: geometry.size.height) { _, height in bandsHeight = height }
+            }
+        }
     }
 
     private var hasStatus: Bool {
@@ -473,18 +473,6 @@ private struct ErrorBanner: View {
 
 
 
-/// Isolated so only this label re-renders on the timer tick.
-private struct ElapsedLabel: View {
-    @ObservedObject var monitor: RecordingMonitor
-    let color: Color
-
-    var body: some View {
-        Text(monitor.elapsed.clockString)
-            .font(Theme.Font.timer)
-            .foregroundStyle(color)
-            .contentTransition(.numericText())
-    }
-}
 
 /// Isolated so the twenty-per-second level updates invalidate only the meters.
 private struct WaveformPair: View {

@@ -44,33 +44,43 @@ IDENTITY="${IDENTITY:-$(security find-identity -v -p codesigning \
     | head -1 \
     | awk -F'"' '{print $2}')}"
 
-if [ "${UNIVERSAL:-0}" = "1" ]; then
-    # SwiftPM cannot resolve the package graph for two architectures at once
-    # here (duplicate ArgmaxCLI module id), so each slice is built alone and
-    # merged afterwards.
-    echo "==> Building arm64 ($CONFIG)"
-    swift build -c "$CONFIG" --arch arm64 > /dev/null
-    ARM_BIN="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/Intinya"
+# xcodebuild rather than `swift build`, and not by preference: MLX (behind the
+# Qwen3-ASR models) ships its GPU kernels as Metal source, and SwiftPM cannot
+# compile Metal — a `swift build` binary runs but every Qwen model dies at
+# load with "Failed to load the default metallib". xcodebuild compiles the
+# shaders into mlx-swift_Cmlx.bundle, which the assembly step below copies
+# into Resources. Requires the Metal Toolchain component
+# (xcodebuild -downloadComponent MetalToolchain) — Xcode 26 doesn't ship it.
+case "$CONFIG" in
+    release) XCODE_CONFIG="Release" ;;
+    *)       XCODE_CONFIG="Debug" ;;
+esac
+DERIVED=".build/xcode"
 
-    echo "==> Building x86_64 ($CONFIG)"
-    swift build -c "$CONFIG" --arch x86_64 > /dev/null
-    X86_BIN="$(swift build -c "$CONFIG" --arch x86_64 --show-bin-path)/Intinya"
-else
-    echo "==> Building ($CONFIG)"
-    swift build -c "$CONFIG"
-    ARM_BIN="$(swift build -c "$CONFIG" --show-bin-path)/Intinya"
-    X86_BIN=""
+# arm64 only, and not negotiable: MLX's Swift surface uses Float16, which
+# does not exist on x86_64 macOS, so the Intel slice stopped compiling the
+# moment Qwen3-ASR came in. UNIVERSAL is accepted so the release job keeps
+# running, but it now means "the widest binary that still builds".
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+    echo "    warning: universal build no longer possible — MLX (Qwen3-ASR)" >&2
+    echo "    warning: is Apple Silicon only. Building arm64 only." >&2
 fi
+echo "==> Building ($XCODE_CONFIG, arm64)"
+xcodebuild -scheme Intinya -configuration "$XCODE_CONFIG" \
+    -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DERIVED" \
+    build -quiet
+PRODUCTS="$DERIVED/Build/Products/$XCODE_CONFIG"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-if [ -n "$X86_BIN" ]; then
-    lipo -create "$ARM_BIN" "$X86_BIN" -output "$APP/Contents/MacOS/Intinya"
-else
-    cp "$ARM_BIN" "$APP/Contents/MacOS/Intinya"
-fi
+cp "$PRODUCTS/Intinya" "$APP/Contents/MacOS/Intinya"
 lipo -archs "$APP/Contents/MacOS/Intinya" | sed 's/^/    /'
+
+# SwiftPM resource bundles. mlx-swift_Cmlx.bundle carries the compiled Metal
+# kernels; MLX finds it by scanning loaded bundles' Resources at runtime, so
+# it must sit in Contents/Resources or Qwen models fail to load.
+find "$PRODUCTS" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$APP/Contents/Resources/" \;
 
 # Regenerated only when the artwork is newer, so a normal build pays nothing.
 if [ -f Resources/AppIcon.png ] && \
@@ -94,7 +104,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key>           <string>$BUILD_NUMBER</string>
-    <key>LSMinimumSystemVersion</key>    <string>14.0</string>
+    <key>LSMinimumSystemVersion</key>    <string>15.0</string>
     <key>NSHighResolutionCapable</key>   <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Intinya records your microphone so your side of the conversation is transcribed.</string>

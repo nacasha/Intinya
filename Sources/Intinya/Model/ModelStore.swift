@@ -1,23 +1,10 @@
+import AudioCommon
 import Foundation
 import SwiftUI
 import WhisperKit
 
 /// Tracks which models are on disk, downloads them on demand, and holds
 /// benchmark results.
-enum ModelRole {
-    case live
-    case enhanced
-    case both
-
-    var label: String {
-        switch self {
-        case .live: return "live"
-        case .enhanced: return "enhanced"
-        case .both: return "live and enhanced"
-        }
-    }
-}
-
 @MainActor
 final class ModelStore: ObservableObject {
 
@@ -35,29 +22,19 @@ final class ModelStore: ObservableObject {
     @Published private(set) var lastError: String?
 
     /// The model used for live transcription. Persisted across launches.
+    ///
+    /// The only assigned role. There is no "enhanced model" setting — the
+    /// enhanced pass takes its model from the Transcribe menu at the moment
+    /// you run it, because that choice depends on the recording at hand.
     @AppStorage("liveModel") var liveModelRaw: String = WhisperModel.defaultLive.rawValue
-    /// The model used for the tier-2 enhanced pass.
-    @AppStorage("enhancedModel") var enhancedModelRaw: String = WhisperModel.defaultEnhanced.rawValue
 
     var liveModel: WhisperModel {
         get { WhisperModel(rawValue: liveModelRaw) ?? .defaultLive }
         set { liveModelRaw = newValue.rawValue }
     }
 
-    var enhancedModel: WhisperModel {
-        get { WhisperModel(rawValue: enhancedModelRaw) ?? .defaultEnhanced }
-        set { enhancedModelRaw = newValue.rawValue }
-    }
-
-    /// A model in use by either role must not be deleted out from under it.
-    func role(of model: WhisperModel) -> ModelRole? {
-        if model == liveModel && model == enhancedModel { return .both }
-        if model == liveModel { return .live }
-        if model == enhancedModel { return .enhanced }
-        return nil
-    }
-
-    var isEnhancedModelReady: Bool { isDownloaded(enhancedModel) }
+    /// The live model must not be deleted out from under the recorder.
+    func isActiveLive(_ model: WhisperModel) -> Bool { model == liveModel }
 
     private var downloadTasks: [WhisperModel: Task<Void, Never>] = [:]
     /// Measured on-disk sizes, filled in off the main thread.
@@ -78,7 +55,22 @@ final class ModelStore: ObservableObject {
     }
 
     func folder(for model: WhisperModel) -> URL {
-        Self.downloadRoot.appendingPathComponent(model.rawValue, isDirectory: true)
+        switch model.family {
+        case .whisper:
+            return Self.downloadRoot.appendingPathComponent(model.rawValue, isDirectory: true)
+        case .qwen:
+            // speech-swift's own cache layout — the engine loads from here, so
+            // the store must point at the same place or downloads double up.
+            // getCacheDirectory only throws when Caches/ itself is unavailable;
+            // the fallback mirrors its sanitised-key layout for that edge.
+            return (try? HuggingFaceDownloader.getCacheDirectory(for: model.rawValue))
+                ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("qwen3-speech", isDirectory: true)
+                    .appendingPathComponent(
+                        HuggingFaceDownloader.sanitizedCacheKey(for: model.rawValue),
+                        isDirectory: true
+                    )
+        }
     }
 
     /// Cheap: three `fileExists` calls per model, nothing recursive.
@@ -98,13 +90,21 @@ final class ModelStore: ObservableObject {
         }
     }
 
-    /// A model is only usable once all three CoreML components are present —
-    /// a partial download must not be presented as ready.
+    /// A model is only usable once all its components are present — a partial
+    /// download must not be presented as ready.
     private func isComplete(_ model: WhisperModel) -> Bool {
         let base = folder(for: model)
-        let required = ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"]
-        return required.allSatisfy {
-            FileManager.default.fileExists(atPath: base.appendingPathComponent($0).path)
+        switch model.family {
+        case .whisper:
+            let required = ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"]
+            return required.allSatisfy {
+                FileManager.default.fileExists(atPath: base.appendingPathComponent($0).path)
+            }
+        case .qwen:
+            // vocab.json is the last file fromPretrained reads; weightsExist
+            // alone would pass between the weights and tokenizer downloads.
+            return HuggingFaceDownloader.weightsExist(in: base)
+                && FileManager.default.fileExists(atPath: base.appendingPathComponent("vocab.json").path)
         }
     }
 
@@ -161,16 +161,30 @@ final class ModelStore: ObservableObject {
         states[model] = .downloading(0)
         lastError = nil
 
+        let destination = folder(for: model)
         downloadTasks[model] = Task { [weak self] in
             defer { Task { @MainActor in self?.downloadTasks[model] = nil } }
             do {
-                _ = try await WhisperKit.download(variant: model.rawValue) { progress in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        if case .downloading = self.states[model] {
-                            self.states[model] = .downloading(progress.fractionCompleted)
+                switch model.family {
+                case .whisper:
+                    _ = try await WhisperKit.download(variant: model.rawValue) { progress in
+                        Task { @MainActor in
+                            self?.applyDownloadProgress(model, progress.fractionCompleted)
                         }
                     }
+                case .qwen:
+                    // Same call, file list, and destination as speech-swift's
+                    // fromPretrained, so loading later finds a warm cache.
+                    try await HuggingFaceDownloader.downloadWeights(
+                        modelId: model.rawValue,
+                        to: destination,
+                        additionalFiles: ["vocab.json", "merges.txt", "tokenizer_config.json"],
+                        progressHandler: { fraction in
+                            Task { @MainActor in
+                                self?.applyDownloadProgress(model, fraction)
+                            }
+                        }
+                    )
                 }
                 await MainActor.run {
                     // Must clear the downloading state first: `refreshStates`
@@ -185,6 +199,12 @@ final class ModelStore: ObservableObject {
                     self?.lastError = "Download failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    private func applyDownloadProgress(_ model: WhisperModel, _ fraction: Double) {
+        if case .downloading = states[model] {
+            states[model] = .downloading(fraction)
         }
     }
 
@@ -205,8 +225,8 @@ final class ModelStore: ObservableObject {
     }
 
     func delete(_ model: WhisperModel) {
-        if let role = role(of: model) {
-            lastError = "\(model.displayName) is the active \(role.label) model. Pick another first."
+        if isActiveLive(model) {
+            lastError = "\(model.displayName) is the active live model. Pick another first."
             return
         }
         do {

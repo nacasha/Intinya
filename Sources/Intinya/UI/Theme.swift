@@ -29,7 +29,6 @@ enum Theme {
 
     enum Font {
         static let display = SwiftUI.Font.system(size: 34, weight: .semibold, design: .rounded)
-        static let timer = SwiftUI.Font.system(size: 44, weight: .medium, design: .rounded)
             .monospacedDigit()
         static let title = SwiftUI.Font.system(size: 15, weight: .semibold)
         static let body = SwiftUI.Font.system(size: 14, weight: .regular)
@@ -44,6 +43,15 @@ enum Theme {
     ///
     /// The bar's own height plus its gap: content scrolls *behind* it, so
     /// without this the last line stops under the bar with no way to reach it.
+    /// One height for the header row on every screen.
+    ///
+    /// Recording and playback each build their own row out of the same switch
+    /// and chips, so they used to match only by coincidence — whatever either
+    /// row gained (a timer, a progress label) silently made that screen's
+    /// header taller than the other's. Fixing the height makes them agree by
+    /// construction.
+    static let headerHeight: CGFloat = 50
+
     static let barClearance: CGFloat = 112
 }
 

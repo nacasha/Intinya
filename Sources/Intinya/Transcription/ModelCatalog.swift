@@ -41,12 +41,27 @@ enum LiveSuitability: Int, Codable {
     }
 }
 
-/// The multilingual WhisperKit CoreML variants.
+/// Which runtime a model runs on. Each family has its own download location,
+/// completeness check, and decode path.
+enum ModelFamily {
+    /// WhisperKit CoreML bundles from argmaxinc.
+    case whisper
+    /// Qwen3-ASR MLX bundles, run through speech-swift.
+    case qwen
+}
+
+/// Every transcription model the app can run. The type name predates the Qwen
+/// additions — it is kept because renaming it would touch every file for zero
+/// behaviour change; `family` is what code should branch on.
 ///
-/// Every `.en` variant and the whole `distil-whisper` family are deliberately
-/// absent: Distil-Whisper is an English-only distillation and the `.en` models
-/// are English-only by construction. Both produce garbage on Indonesian, so
-/// offering them would just be a trap.
+/// Whisper side: every `.en` variant and the whole `distil-whisper` family are
+/// deliberately absent: Distil-Whisper is an English-only distillation and the
+/// `.en` models are English-only by construction. Both produce garbage on
+/// Indonesian, so offering them would just be a trap.
+///
+/// Qwen side: Qwen3-ASR covers Indonesian and English in one model and handles
+/// code-switching natively. Raw values are the HuggingFace repo ids, same as
+/// the Whisper cases are WhisperKit variant ids.
 ///
 /// Naming, which is genuinely confusing in this repo:
 ///   * `large-v3-v20240930` **is** OpenAI's large-v3-turbo (pruned decoder,
@@ -70,7 +85,18 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
     case largeV3 = "openai_whisper-large-v3"
     case largeV3ANE = "openai_whisper-large-v3_turbo"
 
+    case qwenSmall4 = "aufklarer/Qwen3-ASR-0.6B-MLX-4bit"
+    case qwenSmall8 = "aufklarer/Qwen3-ASR-0.6B-MLX-8bit"
+    case qwenLarge5 = "aufklarer/Qwen3-ASR-1.7B-MLX-5bit"
+
     var id: String { rawValue }
+
+    var family: ModelFamily {
+        switch self {
+        case .qwenSmall4, .qwenSmall8, .qwenLarge5: return .qwen
+        default: return .whisper
+        }
+    }
 
     var displayName: String {
         switch self {
@@ -86,6 +112,9 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
         case .largeV3Quantized: return "Large v3 (compressed)"
         case .largeV3: return "Large v3"
         case .largeV3ANE: return "Large v3 (ANE)"
+        case .qwenSmall4: return "Qwen3 0.6B (4-bit)"
+        case .qwenSmall8: return "Qwen3 0.6B (8-bit)"
+        case .qwenLarge5: return "Qwen3 1.7B (5-bit)"
         }
     }
 
@@ -104,6 +133,9 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
         case .largeV3Quantized: return 948
         case .largeV3: return 3090
         case .largeV3ANE: return 3195
+        case .qwenSmall4: return 712
+        case .qwenSmall8: return 1010
+        case .qwenLarge5: return 2444
         }
     }
 
@@ -119,6 +151,9 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
         case .turbo, .turboANE: return .veryGood
         case .largeV3Quantized: return .veryGood
         case .largeV3, .largeV3ANE: return .excellent
+        case .qwenSmall4: return .good
+        case .qwenSmall8: return .veryGood
+        case .qwenLarge5: return .excellent
         }
     }
 
@@ -131,11 +166,14 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
         case .turboQuantized547, .turboQuantized626: return .comfortable
         case .medium, .turbo, .turboANE: return .marginal
         case .largeV3Quantized, .largeV3, .largeV3ANE: return .tooSlow
+        // Community MLX benchmarks put 0.6B at ~60x and 1.7B at ~30x realtime
+        // on Apple Silicon. Still expectations until benchmarked on this machine.
+        case .qwenSmall4, .qwenSmall8, .qwenLarge5: return .comfortable
         }
     }
 
     var isQuantized: Bool {
-        rawValue.hasSuffix("MB")
+        family == .qwen || rawValue.hasSuffix("MB")
     }
 
     /// Honest one-liner, including where the model actively fails.
@@ -165,6 +203,12 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
             return "Highest accuracy available. Too slow for live; use it for the enhanced pass."
         case .largeV3ANE:
             return "Large v3 with ANE-optimised encoder. Fastest way to run full Large v3."
+        case .qwenSmall4:
+            return "Qwen3-ASR, smallest build. Handles Indonesian–English code-switching natively; much faster than any Whisper."
+        case .qwenSmall8:
+            return "Qwen3-ASR 0.6B at 8-bit. Better than 4-bit for little extra disk; strong live pick."
+        case .qwenLarge5:
+            return "Qwen3-ASR 1.7B. Rivals Large v3 accuracy while staying fast enough for live. Wants 24 GB+ RAM."
         }
     }
 
@@ -188,7 +232,6 @@ enum WhisperModel: String, CaseIterable, Identifiable, Codable, Hashable {
     /// clears live comfortably, and live transcription is accuracy-bound rather
     /// than speed-bound on Apple Silicon.
     static let defaultLive: WhisperModel = .turboQuantized626
-    static let defaultEnhanced: WhisperModel = .turboQuantized626
 
     /// Ordered smallest-first so the picker reads as a ramp.
     static var catalog: [WhisperModel] {

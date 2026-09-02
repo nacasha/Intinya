@@ -1,9 +1,18 @@
 import SwiftUI
 
+/// The model manager: a sidebar of compact rows, one detail pane.
+///
+/// Mirrors the app's main split — material sidebar for navigation, opaque
+/// `Theme.content` for the surface you read — so the modal feels like a room
+/// in the same house rather than a dialog bolted on. The previous design
+/// stacked a full card per model, which meant fifteen cards of repeated
+/// buttons and ~2,000 points of scrolling to compare anything; here rows
+/// carry only identity and status, and every verb lives in the detail pane.
 struct ModelPickerView: View {
     @EnvironmentObject private var store: ModelStore
     @Environment(\.dismiss) private var dismiss
     @AppStorage("models.filter") private var filterRaw = Filter.all.rawValue
+    @AppStorage("models.selected") private var selectedRaw = ""
 
     enum Filter: String, CaseIterable, Identifiable {
         case all, installed, available
@@ -19,14 +28,21 @@ struct ModelPickerView: View {
 
     private var filter: Filter { Filter(rawValue: filterRaw) ?? .all }
 
-    private var visible: [WhisperModel] {
-        WhisperModel.catalog.filter { model in
-            switch filter {
-            case .all: return true
-            case .installed: return store.isDownloaded(model)
-            case .available: return !store.isDownloaded(model)
-            }
+    /// Falls back to the live model so the pane is never empty on first open.
+    private var selected: WhisperModel {
+        WhisperModel(rawValue: selectedRaw) ?? store.liveModel
+    }
+
+    private func matchesFilter(_ model: WhisperModel) -> Bool {
+        switch filter {
+        case .all: return true
+        case .installed: return store.isDownloaded(model)
+        case .available: return !store.isDownloaded(model)
         }
+    }
+
+    private func visible(in family: ModelFamily) -> [WhisperModel] {
+        WhisperModel.catalog.filter { $0.family == family && matchesFilter($0) }
     }
 
     private func count(_ filter: Filter) -> Int {
@@ -38,40 +54,34 @@ struct ModelPickerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().opacity(0.5)
-
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(WhisperModel.catalog) { model in
-                        ModelCard(model: model)
-                    }
-                }
-                .padding(20)
-            }
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 296)
+                .background(.ultraThinMaterial)
 
             Divider().opacity(0.5)
-            footer
+
+            ModelDetail(model: selected)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.content)
         }
-        .frame(width: 640, height: 620)
-        .background(.ultraThinMaterial)
+        .frame(width: 840, height: 600)
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Models")
-                        .font(Theme.Font.display)
-                    Text("Multilingual only — English-only models are excluded because they cannot transcribe Indonesian.")
-                        .font(Theme.Font.body)
-                        .foregroundStyle(.secondary)
-                }
+    // MARK: - Sidebar
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Models")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
+                    .controlSize(.small)
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 18)
 
             Picker("", selection: $filterRaw) {
                 ForEach(Filter.allCases) { option in
@@ -80,238 +90,450 @@ struct ModelPickerView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.top, 2)
+            .controlSize(.small)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 6)
 
-            HStack(spacing: 14) {
-                RoleSummary(
-                    title: "Live",
-                    model: store.liveModel,
-                    color: Theme.mic,
-                    ready: store.isDownloaded(store.liveModel)
-                )
-                RoleSummary(
-                    title: "Enhanced",
-                    model: store.enhancedModel,
-                    color: Theme.system,
-                    ready: store.isDownloaded(store.enhancedModel)
-                )
-                Spacer()
-            }
-            .padding(.top, 4)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    providerSection("Whisper", family: .whisper)
+                    providerSection("Qwen3-ASR", family: .qwen)
 
-            if let error = store.lastError {
-                Text(error)
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.recording)
+                    if visible(in: .whisper).isEmpty && visible(in: .qwen).isEmpty {
+                        Text("No models match this filter.")
+                            .font(Theme.Font.body)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
+
+            Divider().opacity(0.5)
+            roleFooter
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
     }
 
-    private var footer: some View {
-        HStack(spacing: 12) {
-            Label("\(WhisperModel.sizeLabel(megabytes: store.totalDiskUsageMB)) on disk", systemImage: "internaldrive")
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
+    @ViewBuilder
+    private func providerSection(_ title: String, family: ModelFamily) -> some View {
+        let models = visible(in: family)
+        if !models.isEmpty {
+            Text(title.uppercased())
+                .font(Theme.Font.label)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
 
-            Spacer()
-
-            if let benchmarking = store.benchmarkingModel {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small).scaleEffect(0.7)
-                    Text(store.benchmarkStatus ?? "Measuring \(benchmarking.displayName)…")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !store.canBenchmark {
-                Text("Install an Indonesian system voice to enable benchmarking")
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(.tertiary)
+            ForEach(models) { model in
+                ModelRow(model: model, isSelected: model == selected)
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedRaw = model.rawValue }
             }
         }
-        .padding(.horizontal, 20)
+    }
+
+    /// Which model records live — always visible, since assigning it is the
+    /// whole reason this window exists. The enhanced pass has no assigned
+    /// model: the Transcribe menu on a recording asks per run.
+    private var roleFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            roleLine("LIVE", model: store.liveModel, color: Theme.mic)
+
+            HStack(spacing: 5) {
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 9))
+                Text("\(WhisperModel.sizeLabel(megabytes: store.totalDiskUsageMB)) on disk")
+            }
+            .font(Theme.Font.caption)
+            .foregroundStyle(.tertiary)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(.regularMaterial)
+    }
+
+    private func roleLine(_ title: String, model: WhisperModel, color: Color) -> some View {
+        let ready = store.isDownloaded(model)
+        return Button {
+            selectedRaw = model.rawValue
+        } label: {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(ready ? color : Color.secondary.opacity(0.4))
+                    .frame(width: 6, height: 6)
+                Text(title)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(color)
+                    .frame(width: 62, alignment: .leading)
+                Text(model.displayName)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if !ready {
+                    Text("not downloaded")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Show \(model.displayName)")
     }
 }
 
-// MARK: - Card
+// MARK: - Row
 
-private struct ModelCard: View {
+/// Identity and status only. Everything actionable lives in the detail pane.
+private struct ModelRow: View {
+    @EnvironmentObject private var store: ModelStore
+    let model: WhisperModel
+    let isSelected: Bool
+
+    private var state: ModelStore.DownloadState {
+        store.states[model] ?? .notDownloaded
+    }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            statusDot
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(store.sizeLabel(for: model))
+                    if case .downloading(let fraction) = state {
+                        Text("· downloading \(Int(fraction * 100))%")
+                            .foregroundStyle(Theme.system)
+                    } else if case .failed = state {
+                        Text("· failed")
+                            .foregroundStyle(Theme.recording)
+                    }
+                }
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+
+            if store.liveModel == model {
+                RoleDot(color: Theme.mic, label: "Live model")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.primary.opacity(0.09) : .clear)
+        }
+        .opacity(model.isRecommended ? 1 : 0.55)
+    }
+
+    @ViewBuilder
+    private var statusDot: some View {
+        switch state {
+        case .downloading(let fraction):
+            ProgressRing(fraction: fraction)
+                .frame(width: 14, height: 14)
+        case .downloaded:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.recording)
+        case .notDownloaded:
+            Image(systemName: "circle.dashed")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// A small colored dot marking a role in the row, with the name in a tooltip.
+private struct RoleDot: View {
+    let color: Color
+    let label: String
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .help(label)
+    }
+}
+
+private struct ProgressRing: View {
+    let fraction: Double
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.primary.opacity(0.12), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: max(0.02, fraction))
+                .stroke(Theme.system, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+    }
+}
+
+// MARK: - Detail
+
+private struct ModelDetail: View {
     @EnvironmentObject private var store: ModelStore
     let model: WhisperModel
 
     private var state: ModelStore.DownloadState {
         store.states[model] ?? .notDownloaded
     }
-    private var role: ModelRole? { store.role(of: model) }
+    private var isLive: Bool { store.isActiveLive(model) }
     private var result: BenchmarkResult? { store.benchmarks[model] }
+    private var isBenchmarking: Bool { store.benchmarkingModel == model }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            titleRow
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                header
+                metrics
+
+                if case .downloaded = state {
+                    roles
+                    benchmark
+                }
+                installSection
+
+                if let error = store.lastError {
+                    Text(error)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.recording)
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .animation(.smooth(duration: 0.25), value: state)
+        .animation(.smooth(duration: 0.25), value: store.liveModelRaw)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(model.displayName)
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                if !model.isRecommended {
+                    Tag(text: "NOT RECOMMENDED", color: Theme.recording)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: 6) {
+                Text(model.family == .qwen ? "Qwen3-ASR · MLX" : "Whisper · CoreML")
+                Text("·")
+                Text(store.sizeLabel(for: model))
+                if model.isQuantized {
+                    Text("·")
+                    Text("compressed")
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+
             Text(model.note)
                 .font(Theme.Font.body)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            metrics
-            actionRow
-        }
-        .padding(14)
-        .background {
-            RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
-                .fill(role != nil ? Theme.mic.opacity(0.10) : Color.primary.opacity(0.04))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
-                .stroke(role != nil ? Theme.mic.opacity(0.5) : Color.primary.opacity(0.08),
-                        lineWidth: role != nil ? 1.5 : 1)
-        }
-        .opacity(model.isRecommended ? 1 : 0.62)
-        .animation(.smooth(duration: 0.25), value: state)
-        .animation(.smooth(duration: 0.25), value: store.liveModelRaw)
-        .animation(.smooth(duration: 0.25), value: store.enhancedModelRaw)
-    }
-
-    private var titleRow: some View {
-        HStack(spacing: 8) {
-            Text(model.displayName)
-                .font(Theme.Font.title)
-
-            if store.liveModel == model {
-                Tag(text: "LIVE", color: Theme.mic)
-            }
-            if store.enhancedModel == model {
-                Tag(text: "ENHANCED", color: Theme.system)
-            }
-            if case .downloaded = state {
-                Tag(text: "INSTALLED", color: .green)
-            }
-            if model.isQuantized {
-                Tag(text: "COMPRESSED", color: .secondary)
-            }
-            if !model.isRecommended {
-                Tag(text: "NOT RECOMMENDED", color: Theme.recording)
-            }
-
-            Spacer()
-
-            HStack(spacing: 5) {
-                if case .downloaded = state {
-                    Image(systemName: "internaldrive.fill")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.green)
-                }
-                Text(model.sizeLabel)
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(.tertiary)
-            }
+                .padding(.top, 2)
         }
     }
 
-    /// Expected ratings until the model has been measured; once a benchmark has
-    /// run, the measured numbers take over and are labelled as such.
+    /// Expected ratings until measured; measured numbers take over and say so.
     private var metrics: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             if let result {
-                Metric(
-                    icon: "checkmark.seal",
-                    title: "\(result.accuracyPercent)% accurate",
-                    subtitle: "measured",
+                MetricTile(
+                    icon: "checkmark.seal.fill",
+                    value: "\(result.accuracyPercent)%",
+                    title: "accurate",
+                    footnote: "measured here",
                     color: accuracyColor(result.wordErrorRate)
                 )
                 .help("Measured on synthesised speech read by an Indonesian voice, "
                     + "which over-pronounces English terms. Use it as a sanity check, "
                     + "not as a ranking of code-switching ability.")
-                Metric(
-                    icon: "gauge.with.needle",
-                    title: String(format: "%.1f× realtime", result.realtimeFactor),
-                    subtitle: result.liveVerdict.label,
+                MetricTile(
+                    icon: "gauge.with.needle.fill",
+                    value: String(format: "%.1f×", result.realtimeFactor),
+                    title: "realtime",
+                    footnote: result.liveVerdict.label,
                     color: liveColor(result.liveVerdict)
                 )
                 .help("Measured on this Mac. This is the number to trust when "
                     + "choosing a live model.")
+                MetricTile(
+                    icon: "bolt.fill",
+                    value: String(format: "%.1fs", result.loadSeconds),
+                    title: "to load",
+                    footnote: "at recording start",
+                    color: .secondary
+                )
             } else {
-                Metric(
+                MetricTile(
                     icon: "checkmark.seal",
-                    title: model.expectedAccuracy.label,
-                    subtitle: "expected",
+                    value: model.expectedAccuracy.label,
+                    title: "accuracy",
+                    footnote: "expected",
                     color: gradeColor(model.expectedAccuracy)
                 )
-                Metric(
+                MetricTile(
                     icon: "gauge.with.needle",
-                    title: model.expectedLive.label,
-                    subtitle: "expected",
+                    value: model.expectedLive.label,
+                    title: "for live use",
+                    footnote: "expected",
                     color: liveColor(model.expectedLive)
                 )
             }
-            Spacer()
         }
     }
 
-    private var actionRow: some View {
-        HStack(spacing: 8) {
-            switch state {
-            case .notDownloaded:
+    /// Assigning the live model is the primary act in this window. Enhanced
+    /// runs are deliberately not assigned here — the Transcribe menu on a
+    /// recording asks which model to use at the moment it matters.
+    private var roles: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Use this model")
+            RoleCard(
+                title: "Live transcription",
+                detail: "Transcribes while you record. Needs to beat realtime. "
+                    + "For re-transcribing a finished recording, pick any installed model "
+                    + "from the Transcribe menu on that recording.",
+                color: Theme.mic,
+                isActive: isLive
+            ) { store.liveModel = model }
+        }
+    }
+
+    private var benchmark: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Benchmark")
+
+            if isBenchmarking {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                    Text(store.benchmarkStatus ?? "Measuring…")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Button {
+                        store.benchmark(model)
+                    } label: {
+                        Label(result == nil ? "Measure on this Mac" : "Re-measure", systemImage: "stopwatch")
+                    }
+                    .controlSize(.small)
+                    .disabled(store.benchmarkingModel != nil || !store.canBenchmark)
+
+                    if !store.canBenchmark {
+                        Text("Install an Indonesian system voice to enable benchmarking")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            if let result {
+                Text("“\(result.transcript)”")
+                    .font(.system(size: 12))
+                    .italic()
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                    }
+                    .help("What this model heard in the benchmark sample — read it to judge quality yourself.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var installSection: some View {
+        switch state {
+        case .notDownloaded:
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Not installed")
                 Button {
                     store.download(model)
                 } label: {
                     Label("Download \(model.sizeLabel)", systemImage: "arrow.down.circle")
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+            }
 
-            case .downloading(let fraction):
-                ProgressView(value: fraction)
-                    .progressViewStyle(.linear)
-                    .frame(width: 160)
-                Text("\(Int(fraction * 100))%")
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(.secondary)
-                Button("Cancel") { store.cancelDownload(model) }
-                    .controlSize(.small)
-
-            case .downloaded:
-                Button("Use for live") { store.liveModel = model }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(store.liveModel == model)
-                    .help("Transcribes during the meeting. Needs to beat realtime.")
-
-                Button("Use for enhanced") { store.enhancedModel = model }
-                    .controlSize(.small)
-                    .disabled(store.enhancedModel == model)
-                    .help("Re-transcribes the recording afterwards for accuracy. Speed matters less.")
-
-                Button {
-                    store.benchmark(model)
-                } label: {
-                    Label(result == nil ? "Measure" : "Re-measure", systemImage: "stopwatch")
+        case .downloading(let fraction):
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Downloading")
+                HStack(spacing: 10) {
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .frame(width: 220)
+                    Text("\(Int(fraction * 100))%")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Cancel") { store.cancelDownload(model) }
+                        .controlSize(.small)
                 }
-                .controlSize(.small)
-                .disabled(store.benchmarkingModel != nil || !store.canBenchmark)
+            }
 
-                Button(role: .destructive) {
-                    store.delete(model)
-                } label: {
-                    Image(systemName: "trash")
+        case .downloaded:
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Installed · \(store.sizeLabel(for: model))")
+                HStack(spacing: 10) {
+                    Button(role: .destructive) {
+                        store.delete(model)
+                    } label: {
+                        Label("Delete from disk", systemImage: "trash")
+                    }
+                    .controlSize(.small)
+                    .disabled(isLive)
+
+                    if isLive {
+                        Text("In use as the live model — pick another first.")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-                .controlSize(.small)
-                .disabled(role != nil)
+            }
 
-            case .failed(let message):
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Download failed")
                 Text(message)
                     .font(Theme.Font.caption)
                     .foregroundStyle(Theme.recording)
-                    .lineLimit(2)
-                Button("Retry") { store.download(model) }
-                    .controlSize(.small)
+                    .lineLimit(3)
+                Button {
+                    store.download(model)
+                } label: {
+                    Label("Retry download", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
             }
-
-            Spacer()
         }
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(Theme.Font.label)
+            .foregroundStyle(.tertiary)
     }
 
     private func gradeColor(_ grade: AccuracyGrade) -> Color {
@@ -339,31 +561,84 @@ private struct ModelCard: View {
 
 // MARK: - Bits
 
-private struct Metric: View {
+private struct MetricTile: View {
     let icon: String
+    let value: String
     let title: String
-    let subtitle: String
+    let footnote: String
     let color: Color
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 11))
-                .foregroundStyle(color)
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(color)
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(subtitle)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Text(footnote)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(minWidth: 108, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(color.opacity(0.08))
+        }
+    }
+}
+
+/// One role, as a pressable card: active state shows as a filled border, and
+/// pressing an inactive card assigns the role to the shown model.
+private struct RoleCard: View {
+    let title: String
+    let detail: String
+    let color: Color
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Circle().fill(color).frame(width: 7, height: 7)
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    if isActive {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(color)
+                    }
+                }
+                Text(detail)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isActive ? color.opacity(0.10) : Color.primary.opacity(0.04))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isActive ? color.opacity(0.55) : Color.primary.opacity(0.08),
+                            lineWidth: isActive ? 1.5 : 1)
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(color.opacity(0.10))
-        }
+        .buttonStyle(.plain)
+        .disabled(isActive)
+        .help(isActive ? "\(title) uses this model now" : "Use this model for \(title.lowercased())")
     }
 }
 
@@ -377,30 +652,5 @@ private struct Tag: View {
             .foregroundStyle(color)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.14)))
-    }
-}
-
-
-/// Shows which model each role currently uses, and whether it is downloaded.
-private struct RoleSummary: View {
-    let title: String
-    let model: WhisperModel
-    let color: Color
-    let ready: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(ready ? color : Color.secondary.opacity(0.4))
-                .frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title.uppercased())
-                    .font(Theme.Font.label)
-                    .foregroundStyle(color)
-                Text(ready ? model.displayName : "\(model.displayName) — not downloaded")
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(ready ? .secondary : Color.orange)
-            }
-        }
     }
 }

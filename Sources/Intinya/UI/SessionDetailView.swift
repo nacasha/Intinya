@@ -62,6 +62,9 @@ struct SessionDetailView: View {
     /// Height of the document's heading block, so the notes editor can claim
     /// exactly the rest of the pane.
     @State private var identityHeight: CGFloat = 0
+    /// Glossary terms found in this transcript. Matched when either side
+    /// changes, never during a render.
+    @State private var termOccurrences: [TermsPane.Occurrence] = []
     @State private var scrubbing = false
     @State private var scrubValue: TimeInterval = 0
 
@@ -115,6 +118,11 @@ struct SessionDetailView: View {
         .onChange(of: enhancer.completions) { _, _ in
             load()
             sessions.refresh()
+        }
+        // The other half of the input: learning a term should surface it here
+        // without reloading the session.
+        .onChange(of: glossary.activeTerms) { _, terms in
+            termOccurrences = TermsPane.occurrences(in: segments, terms: terms)
         }
         .onDisappear { player.stop() }
     }
@@ -176,7 +184,10 @@ struct SessionDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            // Fades in place rather than sliding down from above. `.move(edge:
+            // .top)` starts the row off-screen *upwards* — which here means it
+            // animates in across the header it is supposed to sit under.
+            .transition(.opacity)
     }
 
     /// Pane switch on the left, actions on the right.
@@ -294,7 +305,7 @@ struct SessionDetailView: View {
             )
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .frame(height: Theme.headerHeight)
     }
 
     /// Writes a note against one line.
@@ -359,7 +370,10 @@ struct SessionDetailView: View {
                             activeID: activeSegmentID,
                             onSeek: { player.play(from: $0) },
                             onEdit: { updateSegment($0, text: $1) },
-                            onNote: { annotate($0, note: $1) }
+                            onNote: { annotate($0, note: $1) },
+                            onAddSection: { addSection(at: $0) },
+                            onRenameSection: { renameSection($0, to: $1) },
+                            onDeleteSection: { deleteSection($0) }
                         )
                     .equatable()
                     .padding(.top, 28)
@@ -426,7 +440,7 @@ struct SessionDetailView: View {
                 title: "No transcript",
                 detail: "Terms are found in what was said."
             )
-        } else if TermsPane.occurrences(in: segments, terms: glossary.activeTerms).isEmpty {
+        } else if termOccurrences.isEmpty {
             EmptyState(
                 systemImage: "character.book.closed",
                 title: "No glossary terms here",
@@ -442,8 +456,7 @@ struct SessionDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 identity
                 TermsPane(
-                    segments: segments,
-                    terms: glossary.activeTerms,
+                    occurrences: termOccurrences,
                     onSeek: { player.play(from: $0) }
                 )
                 .padding(.top, 20)
@@ -482,9 +495,7 @@ struct SessionDetailView: View {
             hasVideo: session.hasVideo,
             currentFile: currentKeyframeFile,
             videoPlayer: player.videoPlayer,
-            subtitle: activeSegmentID.flatMap { id in
-                segments.first { $0.id == id }?.text
-            }
+            subtitle: activeSegment?.text
         )
         .equatable()
         .padding(.horizontal, 20)
@@ -552,6 +563,7 @@ struct SessionDetailView: View {
         notes.load(session.directory)
         player.load(session)
         loadWaveform()
+        termOccurrences = TermsPane.occurrences(in: segments, terms: glossary.activeTerms)
         // A session with no screen has no pane worth showing, so do not strand
         // the switch on an empty one after navigating.
         // A recording with no screen has no pane worth showing, so fall back
@@ -706,8 +718,19 @@ struct SessionDetailView: View {
     /// Resolved here so the screen pane's inputs change only when the picture
     /// does, rather than on every playback tick.
     private var currentKeyframeFile: String? {
-        let time = player.currentTime
-        return (keyframes.last { $0.time <= time + 0.01 } ?? keyframes.first)?.file
+        guard !keyframes.isEmpty else { return nil }
+        let time = player.currentTime + 0.01
+
+        // Binary search, like the active line. A scan is cheap for the seventy
+        // frames a slide deck produces and much less so for the thousands a
+        // long screen recording does — and either way it runs on every tick.
+        var low = 0
+        var high = keyframes.count
+        while low < high {
+            let mid = (low + high) / 2
+            if keyframes[mid].time <= time { low = mid + 1 } else { high = mid }
+        }
+        return keyframes[max(0, low - 1)].file
     }
 
     /// The line being spoken now.
@@ -718,7 +741,12 @@ struct SessionDetailView: View {
     /// Binary search rather than a scan: this runs on every playback tick, and a
     /// linear pass over a long transcript 20 times a second is real work for an
     /// answer that changes once a sentence.
-    private var activeSegmentID: TranscriptSegment.ID? {
+    private var activeSegmentID: TranscriptSegment.ID? { activeSegment?.id }
+
+    /// The segment itself, so callers that need its text do not then search the
+    /// array for it — the screen pane's subtitle was doing exactly that on every
+    /// tick, an O(n) scan behind an O(log n) lookup.
+    private var activeSegment: TranscriptSegment? {
         let time = player.currentTime
         guard !segments.isEmpty else { return nil }
 
@@ -737,7 +765,7 @@ struct SessionDetailView: View {
         var index = low - 1
         while index >= 0, time - segments[index].start <= longestSegment {
             let segment = segments[index]
-            if time < max(segment.end, segment.start + 0.3) { return segment.id }
+            if time < max(segment.end, segment.start + 0.3) { return segment }
             index -= 1
         }
         return nil

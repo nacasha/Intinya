@@ -61,6 +61,14 @@ final class LiveChunker {
         return ready
     }
 
+    /// A non-consuming snapshot of the utterance still being spoken, for
+    /// provisional decoding. Nil until there is at least a second of audio
+    /// with detected speech — a preview of silence is just noise.
+    func peek() -> Chunk? {
+        guard buffer.count >= Int(1.0 * sampleRate), flags.contains(true) else { return nil }
+        return makeChunk(sampleCount: buffer.count)
+    }
+
     /// Emits whatever is left, regardless of length. Call on stop.
     func drain() -> Chunk? {
         defer { reset() }

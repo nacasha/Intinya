@@ -23,6 +23,9 @@ struct TimelineTranscript: View, Equatable {
     var onSeek: ((TimeInterval) -> Void)?
     var onEdit: ((TranscriptSegment, String) -> Void)?
     var onNote: ((TranscriptSegment, String?) -> Void)?
+    var onAddSection: ((TimeInterval) -> Void)?
+    var onRenameSection: ((MeetingSection, String) -> Void)?
+    var onDeleteSection: ((MeetingSection) -> Void)?
 
     static func == (lhs: TimelineTranscript, rhs: TimelineTranscript) -> Bool {
         lhs.activeID == rhs.activeID
@@ -35,7 +38,11 @@ struct TimelineTranscript: View, Equatable {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
                 ForEach(sectionsBefore(index)) { section in
-                    TimelineSectionHeader(section: section)
+                    TimelineSectionHeader(
+                        section: section,
+                        onRename: onRenameSection.map { rename in { rename(section, $0) } },
+                        onDelete: onDeleteSection.map { delete in { delete(section) } }
+                    )
                 }
 
                 TimelineRow(
@@ -48,7 +55,8 @@ struct TimelineTranscript: View, Equatable {
                     directory: directory,
                     onSeek: onSeek,
                     onEdit: onEdit.map { edit in { edit(segment, $0) } },
-                    onNote: onNote.map { note in { note(segment, $0) } }
+                    onNote: onNote.map { note in { note(segment, $0) } },
+                    onAddSection: onAddSection.map { add in { add(segment.start) } }
                 )
                 .equatable()
                 .id(segment.id)
@@ -89,6 +97,7 @@ private struct TimelineRow: View, Equatable {
     var onSeek: ((TimeInterval) -> Void)?
     var onEdit: ((String) -> Void)?
     var onNote: ((String?) -> Void)?
+    var onAddSection: (() -> Void)?
 
     static func == (lhs: TimelineRow, rhs: TimelineRow) -> Bool {
         lhs.segment == rhs.segment
@@ -287,6 +296,9 @@ private struct TimelineRow: View, Equatable {
                     isNoting = true
                 }
             }
+            if let onAddSection {
+                RowAction(icon: "text.insert", help: "Start a section here", action: onAddSection)
+            }
             if onEdit != nil {
                 RowAction(icon: "pencil", help: "Edit this line") {
                     draft = segment.text
@@ -388,6 +400,12 @@ private struct KeyframeStrip: View {
 
 private struct TimelineSectionHeader: View {
     let section: MeetingSection
+    var onRename: ((String) -> Void)?
+    var onDelete: (() -> Void)?
+
+    @State private var isEditing = false
+    @State private var hovering = false
+    @State private var draft = ""
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
@@ -399,13 +417,44 @@ private struct TimelineSectionHeader: View {
 
             Color.clear.frame(width: 9).padding(.horizontal, 14)
 
-            Text(section.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.system)
-                .lineLimit(1)
+            if isEditing {
+                TextField("Section name", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 280)
+                    .onSubmit(commit)
+
+                Button("Save", action: commit).controlSize(.small)
+                Button("Cancel") { isEditing = false }.controlSize(.small)
+            } else {
+                Text(section.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.system)
+                    .lineLimit(1)
+
+                if hovering {
+                    if onRename != nil {
+                        RowAction(icon: "pencil", help: "Rename section") {
+                            draft = section.title
+                            isEditing = true
+                        }
+                    }
+                    if let onDelete {
+                        RowAction(icon: "trash", help: "Delete section", action: onDelete)
+                    }
+                }
+            }
 
             Spacer(minLength: 0)
         }
+        // Fixed, so revealing the controls cannot shift the lines below.
+        .frame(height: 24)
         .padding(.bottom, 14)
+        .onHover { hovering = $0 }
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { onRename?(trimmed) }
+        isEditing = false
     }
 }

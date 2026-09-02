@@ -74,4 +74,14 @@ struct Glossary: Codable, Equatable {
             + "misalnya: \(picked). "
             + "Tulis istilah bahasa Inggris dengan ejaan bahasa Inggris yang benar."
     }
+
+    /// The bare term list, for decoders that take vocabulary hints as context
+    /// rather than a fake transcript preamble (Qwen3-ASR).
+    ///
+    /// Deliberately not a sentence: Qwen echoes its context back over silence
+    /// or mumbled audio, and a parroted word list is caught by the engine's
+    /// echo guard, whereas a parroted natural sentence reads like transcript.
+    func termList(maxTerms: Int = 60) -> String {
+        terms.prefix(maxTerms).joined(separator: ", ")
+    }
 }

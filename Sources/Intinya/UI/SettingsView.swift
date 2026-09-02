@@ -74,24 +74,15 @@ struct SettingsView: View {
     }
 
     private var transcription: some View {
-        Section2(title: "Transcription", subtitle: "Which Whisper model runs when.") {
-            VStack(alignment: .leading, spacing: 10) {
-                RolePicker(
-                    role: "Live",
-                    detail: "Runs during the meeting. Must beat realtime.",
-                    current: models.liveModel,
-                    choices: downloaded,
-                    isReady: models.isDownloaded(models.liveModel)
-                ) { models.liveModel = $0 }
-
-                RolePicker(
-                    role: "Enhanced",
-                    detail: "Re-transcribes afterwards. Accuracy over speed.",
-                    current: models.enhancedModel,
-                    choices: downloaded,
-                    isReady: models.isEnhancedModelReady
-                ) { models.enhancedModel = $0 }
-            }
+        Section2(title: "Transcription", subtitle: "The model that transcribes while you record.") {
+            RolePicker(
+                role: "Live",
+                detail: "Runs during the meeting. Must beat realtime. "
+                    + "Re-transcribing a finished recording picks its model in the Transcribe menu.",
+                current: models.liveModel,
+                choices: downloaded,
+                isReady: models.isDownloaded(models.liveModel)
+            ) { models.liveModel = $0 }
         }
     }
 
@@ -107,10 +98,8 @@ struct SettingsView: View {
                     DownloadedModelRow(
                         model: model,
                         isLive: models.liveModel == model,
-                        isEnhanced: models.enhancedModel == model,
                         sizeLabel: models.sizeLabel(for: model),
                         onUseLive: { models.liveModel = model },
-                        onUseEnhanced: { models.enhancedModel = model },
                         onDelete: { models.delete(model) }
                     )
                 }
@@ -344,10 +333,8 @@ private struct RolePicker: View {
 private struct DownloadedModelRow: View {
     let model: WhisperModel
     let isLive: Bool
-    let isEnhanced: Bool
     let sizeLabel: String
     let onUseLive: () -> Void
-    let onUseEnhanced: () -> Void
     let onDelete: () -> Void
 
     @State private var hovering = false
@@ -360,9 +347,6 @@ private struct DownloadedModelRow: View {
                         .font(.system(size: 12, weight: .medium))
                     if isLive {
                         Tag(text: "LIVE", color: Theme.mic)
-                    }
-                    if isEnhanced {
-                        Tag(text: "ENHANCED", color: Theme.system)
                     }
                 }
                 Text("\(model.expectedAccuracy.label) · \(model.expectedLive.label)")
@@ -382,18 +366,14 @@ private struct DownloadedModelRow: View {
                     HeaderAction(title: "Live", systemImage: "dot.radiowaves.left.and.right",
                                  help: "Use for live transcription", action: onUseLive)
                 }
-                if !isEnhanced {
-                    HeaderAction(title: "Enhanced", systemImage: "wand.and.sparkles",
-                                 help: "Use for the enhanced pass", action: onUseEnhanced)
-                }
-                // An in-use model cannot be deleted out from under a role.
+                // The live model cannot be deleted out from under the recorder.
                 HeaderAction(
                     title: "Delete",
                     systemImage: "trash",
                     tint: Theme.recording,
-                    isEnabled: !isLive && !isEnhanced,
-                    help: isLive || isEnhanced
-                        ? "In use — pick another model for this role first"
+                    isEnabled: !isLive,
+                    help: isLive
+                        ? "In use — pick another live model first"
                         : "Remove this model from disk",
                     action: onDelete
                 )

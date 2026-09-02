@@ -27,6 +27,18 @@ final class Recorder: ObservableObject {
     /// the side the text will actually arrive on.
     @Published private(set) var pending: [AudioSource: Int] = [:]
 
+    /// Provisional text for the utterance still being spoken, per track.
+    ///
+    /// Decoded from a snapshot of the open buffer every second or so, so words
+    /// appear while you talk instead of after you stop. Never persisted, never
+    /// in `segments` — the real chunk replaces it when the utterance closes,
+    /// and its tail is wrong often enough that saving it would be saving noise.
+    @Published private(set) var partials: [AudioSource: TranscriptSegment] = [:]
+    /// Tracks with a provisional decode running, so previews never stack up
+    /// behind a slow one.
+    private var partialInFlight: Set<AudioSource> = []
+    private var timerTicks = 0
+
     var pendingChunks: Int { pending.values.reduce(0, +) }
 
     /// Waveform levels and elapsed time. A separate object on purpose — see
@@ -365,6 +377,7 @@ final class Recorder: ObservableObject {
         lastSessionDirectory = nil
         keyframeCount = 0
         pending = [:]
+        partials = [:]
 
         guard isModelReady else {
             errorMessage = "The transcription model is still loading."
@@ -491,6 +504,8 @@ final class Recorder: ObservableObject {
             // A pause is a natural utterance boundary; flush so the last words
             // appear now rather than after resume.
             ingest.flush()
+            // The flushed chunks supersede any preview of the same audio.
+            partials = [:]
             stopTimer()
             status = "Paused"
         }
@@ -552,6 +567,8 @@ final class Recorder: ObservableObject {
         ingest.setPaused(false)
         status = "Finishing…"
         stopTimer()
+        // Previews die with the recording; the drained chunks are the record.
+        partials = [:]
 
         mic.stop()
         await system.stop()
@@ -649,6 +666,10 @@ final class Recorder: ObservableObject {
             do {
                 guard let text = try await engine.transcribe(samples: chunk.samples) else { return }
                 await MainActor.run {
+                    // The durable line covers the preview's span — retire it.
+                    if let partial = self.partials[source], partial.start < chunk.end {
+                        self.partials[source] = nil
+                    }
                     self.segments.append(
                         TranscriptSegment(
                             source: source,
@@ -700,10 +721,60 @@ final class Recorder: ObservableObject {
     // MARK: Timer
 
     private func startTimer() {
+        timerTicks = 0
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let startedAt = self.startedAt, !self.isPaused else { return }
                 self.monitor.setElapsed(self.accumulated + Date().timeIntervalSince(startedAt))
+                // Every 4th tick: the preview cadence rides the elapsed timer
+                // so it starts and stops with recording by construction.
+                self.timerTicks += 1
+                if self.timerTicks % 4 == 0 { self.refreshPartials() }
+            }
+        }
+    }
+
+    /// Decodes a snapshot of the still-open utterance on each track so words
+    /// appear while you speak.
+    ///
+    /// Provisional by construction: the snapshot ends mid-sentence, so the last
+    /// few words wobble between refreshes until the real segment replaces the
+    /// row. Real chunks always outrank previews for the engine — a track with
+    /// a queued chunk, or a preview still decoding, is skipped this round.
+    private func refreshPartials() {
+        guard isRecording, isModelReady else { return }
+        ingest.snapshotPending { [weak self] snapshots in
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                for (chunk, source) in snapshots {
+                    guard self.pending[source, default: 0] == 0,
+                          !self.partialInFlight.contains(source)
+                    else { continue }
+                    self.partialInFlight.insert(source)
+
+                    Task { [engine = self.engine] in
+                        let text = try? await engine.transcribe(samples: chunk.samples)
+                        await MainActor.run {
+                            self.partialInFlight.remove(source)
+                            guard self.isRecording else { return }
+                            // Stale if the utterance closed while this was
+                            // decoding: the durable line owns this span now.
+                            let lastEnd = self.segments
+                                .filter { $0.source == source }
+                                .map(\.end).max() ?? 0
+                            guard chunk.start >= lastEnd - 0.25 else { return }
+                            if let text = text.flatMap({ $0 }) {
+                                self.partials[source] = TranscriptSegment(
+                                    source: source,
+                                    start: chunk.start,
+                                    end: chunk.end,
+                                    text: text,
+                                    tier: .live
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -92,6 +92,22 @@ final class CaptureIngest {
         }
     }
 
+    /// Snapshots the not-yet-closed utterance on each track, for provisional
+    /// decoding. Non-consuming: the chunkers keep their buffers and will emit
+    /// the same audio as a real chunk when the utterance ends.
+    /// Delivered on the main queue, like `onChunk`.
+    func snapshotPending(_ completion: @escaping ([(LiveChunker.Chunk, AudioSource)]) -> Void) {
+        queue.async {
+            var snapshots: [(LiveChunker.Chunk, AudioSource)] = []
+            if !self.isPaused {
+                for (source, chunker) in self.chunkers {
+                    if let chunk = chunker.peek() { snapshots.append((chunk, source)) }
+                }
+            }
+            DispatchQueue.main.async { completion(snapshots) }
+        }
+    }
+
     /// Called from the capture threads. Returns immediately.
     func push(_ samples: [Float], from source: AudioSource) {
         queue.async {
