@@ -261,7 +261,7 @@ struct SessionDetailView: View {
             )
 
             HeaderMenu(
-                title: assignedType?.name ?? "No Type",
+                title: assignedType?.name ?? "No Template",
                 systemImage: assignedType?.systemImage ?? "square.grid.2x2",
                 help: "Decides how the AI summary is written",
                 items: meetingTypes.types.map { type in

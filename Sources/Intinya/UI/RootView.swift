@@ -108,17 +108,17 @@ struct RootView: View {
                 ) { route = .glossary; selection.removeAll() }
 
                 SidebarNavRow(
+                    title: "Templates",
+                    systemImage: "list.bullet.rectangle",
+                    badge: "\(meetingTypes.types.count)",
+                    isSelected: route == .meetingTypes
+                ) { route = .meetingTypes; selection.removeAll() }
+
+                SidebarNavRow(
                     title: "Settings",
                     systemImage: "gearshape",
                     isSelected: route == .settings
                 ) { route = .settings; selection.removeAll() }
-
-                SidebarNavRow(
-                    title: "Meeting Types",
-                    systemImage: "rectangle.3.group",
-                    badge: "\(meetingTypes.types.count)",
-                    isSelected: route == .meetingTypes
-                ) { route = .meetingTypes; selection.removeAll() }
             }
             .padding(.horizontal, 10)
             .padding(.top, 10)
@@ -239,7 +239,7 @@ struct RootView: View {
 
             HStack(spacing: 6) {
                 Menu {
-                    Button("All Types") { filterTypeID = "" }
+                    Button("All Templates") { filterTypeID = "" }
                     Divider()
                     ForEach(meetingTypes.types) { type in
                         Button {
@@ -289,7 +289,7 @@ struct RootView: View {
         guard !filterTypeID.isEmpty,
               let id = UUID(uuidString: filterTypeID),
               let type = meetingTypes.type(id: id)
-        else { return "All Types" }
+        else { return "All Templates" }
         return type.name
     }
 
@@ -311,7 +311,10 @@ struct RootView: View {
         case .settings:
             SettingsView()
         case .glossary:
-            GlossaryView()
+            GlossaryView { sessionID in
+                selection = [sessionID]
+                route = .session(sessionID)
+            }
         case .meetingTypes:
             MeetingTypesView()
         case .session(let id):

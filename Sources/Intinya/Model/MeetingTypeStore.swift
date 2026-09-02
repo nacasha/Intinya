@@ -38,7 +38,7 @@ final class MeetingTypeStore: ObservableObject {
     @discardableResult
     func add() -> MeetingType {
         let new = MeetingType(
-            name: "New Type",
+            name: "New Template",
             systemImage: "sparkles",
             detail: "Describe when to use this.",
             summaryPrompt: """

@@ -148,7 +148,7 @@ struct LibraryView: View {
                     title: filterName,
                     systemImage: "line.3.horizontal.decrease",
                     tint: filterTypeID.isEmpty ? nil : Theme.system,
-                    help: "Show only one meeting type",
+                    help: "Show only one template",
                     items: [
                         .action("All Types", systemImage: "square.grid.2x2") { filterTypeID = "" },
                         .separator,
@@ -239,7 +239,7 @@ struct LibraryView: View {
         guard !filterTypeID.isEmpty,
               let id = UUID(uuidString: filterTypeID),
               let type = meetingTypes.type(id: id)
-        else { return "All Types" }
+        else { return "All Templates" }
         return type.name
     }
 
@@ -271,7 +271,7 @@ private struct SessionCard: View {
                 HStack(spacing: 6) {
                     Image(systemName: type?.systemImage ?? "waveform")
                         .font(.system(size: 10, weight: .semibold))
-                    Text((type?.name ?? "No Type").uppercased())
+                    Text((type?.name ?? "No Template").uppercased())
                         .font(Theme.Font.label)
                         .tracking(0.5)
                     Spacer(minLength: 0)

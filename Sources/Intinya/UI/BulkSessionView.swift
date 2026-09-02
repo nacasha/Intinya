@@ -74,10 +74,10 @@ struct BulkSessionView: View {
 
             HStack(spacing: 10) {
                 HeaderMenu(
-                    title: "Set Type",
+                    title: "Set Template",
                     systemImage: "square.grid.2x2",
                     tint: Theme.system,
-                    help: "Assign a meeting type to all of these at once",
+                    help: "Assign a template to all of these at once",
                     items: meetingTypes.types.map { type in
                         .action(type.name, systemImage: type.systemImage) { onAssignType(type) }
                     } + [

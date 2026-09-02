@@ -30,9 +30,9 @@ struct MeetingTypesView: View {
     private var list: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Meeting Types")
+                Text("Templates")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Each type summarises differently.")
+                Text("Each template summarises differently.")
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
             }
@@ -78,7 +78,7 @@ struct MeetingTypesView: View {
             MeetingTypeDetail(type: selected)
                 .id(selected.id)
         } else {
-            Text("Select a type")
+            Text("Select a template")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -170,7 +170,7 @@ private struct MeetingTypeDetail: View {
                     HeaderAction(
                         title: "Reset",
                         systemImage: "arrow.uturn.backward",
-                        help: "Restore this type's original prompt"
+                        help: "Restore this template's original prompt"
                     ) {
                         store.reset(draft)
                         draft = store.type(id: draft.id) ?? draft
@@ -180,7 +180,7 @@ private struct MeetingTypeDetail: View {
                         title: "Delete",
                         systemImage: "trash",
                         tint: Theme.recording,
-                        help: "Remove this type"
+                        help: "Remove this template"
                     ) {
                         store.remove(draft)
                     }

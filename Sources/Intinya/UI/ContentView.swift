@@ -227,7 +227,7 @@ struct ContentView: View {
             LiveAIMenu(runner: activity.ai(for: ActivityCenter.liveKey))
 
             HeaderMenu(
-                title: activeType?.name ?? "No Type",
+                title: activeType?.name ?? "No Template",
                 systemImage: activeType?.systemImage ?? "square.grid.2x2",
                 help: "Decides how the AI summarises this meeting, and preselects screen capture",
                 items: meetingTypes.types.map { type in

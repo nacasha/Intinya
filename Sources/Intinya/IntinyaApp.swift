@@ -67,6 +67,7 @@ struct IntinyaApp: App {
     @StateObject private var glossaryStore = GlossaryStore()
     @StateObject private var meetingTypeStore = MeetingTypeStore()
     @StateObject private var activityCenter = ActivityCenter()
+    @StateObject private var glossaryIndex = GlossaryIndex()
 
     var body: some Scene {
         Window("Intinya", id: "main") {
@@ -77,6 +78,7 @@ struct IntinyaApp: App {
                 .environmentObject(glossaryStore)
                 .environmentObject(meetingTypeStore)
                 .environmentObject(activityCenter)
+                .environmentObject(glossaryIndex)
                 // The chips, sidebar rows and transcript controls are all custom
                 // shapes, so AppKit's focus ring lands as a rounded rectangle
                 // that traces none of them. Set once here rather than per
@@ -92,46 +94,8 @@ struct IntinyaApp: App {
             MenuBarContent()
                 .environmentObject(recorder)
         } label: {
-            Image(systemName: recorder.isRecording ? "record.circle.fill" : "waveform")
+            Image(nsImage: MenuBarIcon.image(recording: recorder.isRecording, paused: recorder.isPaused))
         }
         .menuBarExtraStyle(.menu)
-    }
-}
-
-struct MenuBarContent: View {
-    @EnvironmentObject private var recorder: Recorder
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button(recorder.isRecording ? "Stop Recording" : "Start Recording") {
-            recorder.toggleRecording()
-        }
-        .disabled(!recorder.isModelReady)
-
-        if recorder.isRecording {
-            Text("Recording · \(recorder.monitor.elapsed.clockString)")
-        } else {
-            Text(recorder.status)
-        }
-
-        Divider()
-
-        Button("Open Meeting") {
-            if let delegate = NSApp.delegate as? AppDelegate {
-                delegate.showMainWindow()
-            } else {
-                openWindow(id: "main")
-            }
-        }
-
-        Button("Reveal Recordings") {
-            guard let url = recorder.currentSessionDirectory else { return }
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        }
-        .disabled(recorder.currentSessionDirectory == nil)
-
-        Divider()
-        Button("Quit") { NSApplication.shared.terminate(nil) }
-            .keyboardShortcut("q")
     }
 }
