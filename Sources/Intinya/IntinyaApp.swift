@@ -68,6 +68,9 @@ struct IntinyaApp: App {
     @StateObject private var meetingTypeStore = MeetingTypeStore()
     @StateObject private var activityCenter = ActivityCenter()
     @StateObject private var glossaryIndex = GlossaryIndex()
+    // App-level, so the library is indexed once and survives leaving the search
+    // screen — a fresh index on every visit is a re-read of every transcript.
+    @StateObject private var searchIndex = SearchIndex()
 
     var body: some Scene {
         Window("Intinya", id: "main") {
@@ -79,6 +82,7 @@ struct IntinyaApp: App {
                 .environmentObject(meetingTypeStore)
                 .environmentObject(activityCenter)
                 .environmentObject(glossaryIndex)
+                .environmentObject(searchIndex)
                 // The chips, sidebar rows and transcript controls are all custom
                 // shapes, so AppKit's focus ring lands as a rounded rectangle
                 // that traces none of them. Set once here rather than per

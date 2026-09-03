@@ -6,6 +6,7 @@ enum Route: Hashable {
     case glossary
     case meetingTypes
     case library
+    case search
     case settings
     case session(String)   // session id
     case multiple          // more than one recording selected
@@ -27,6 +28,10 @@ struct RootView: View {
     @State private var selection = Set<String>()
     /// Recordings awaiting delete confirmation.
     @State private var pendingDelete: [Session] = []
+    /// Where the next opened recording should land, when it was reached from
+    /// search rather than from the list. Cleared by any other navigation, so a
+    /// stale line cannot pull a later visit somewhere unexpected.
+    @State private var focus: SessionFocus?
     @State private var search = ""
     @AppStorage("sidebar.hideEmpty") private var hideEmpty = true
     @AppStorage("sidebar.filterTypeID") private var filterTypeID = ""
@@ -88,7 +93,7 @@ struct RootView: View {
                     isRecording: recorder.isRecording,
                     isPaused: recorder.isPaused,
                     monitor: recorder.monitor
-                ) { route = .record; selection.removeAll() }
+                ) { go(.record) }
                 // Set apart from the destinations below it, so it reads as the
                 // app's action rather than the first of five places to go.
                 .padding(.bottom, 6)
@@ -98,27 +103,36 @@ struct RootView: View {
                     systemImage: "square.grid.2x2.fill",
                     badge: "\(sessions.sessions.count)",
                     isSelected: route == .library
-                ) { route = .library; selection.removeAll() }
+                ) { go(.library) }
+
+                SidebarNavRow(
+                    title: "Search",
+                    systemImage: "magnifyingglass",
+                    isSelected: route == .search
+                ) { go(.search) }
+                // The shortcut everyone already tries. Lands on the row's own
+                // button, so the screen it opens is the one it highlights.
+                .keyboardShortcut("f", modifiers: .command)
 
                 SidebarNavRow(
                     title: "Glossary",
                     systemImage: "character.book.closed",
                     badge: glossary.learned.isEmpty ? nil : "\(glossary.learned.count)",
                     isSelected: route == .glossary
-                ) { route = .glossary; selection.removeAll() }
+                ) { go(.glossary) }
 
                 SidebarNavRow(
                     title: "Templates",
                     systemImage: "list.bullet.rectangle",
                     badge: "\(meetingTypes.types.count)",
                     isSelected: route == .meetingTypes
-                ) { route = .meetingTypes; selection.removeAll() }
+                ) { go(.meetingTypes) }
 
                 SidebarNavRow(
                     title: "Settings",
                     systemImage: "gearshape",
                     isSelected: route == .settings
-                ) { route = .settings; selection.removeAll() }
+                ) { go(.settings) }
             }
             .padding(.horizontal, 10)
             .padding(.top, 10)
@@ -195,6 +209,14 @@ struct RootView: View {
         } message: {
             Text("The audio, transcript, notes, and screen capture are removed. This cannot be undone.")
         }
+    }
+
+    /// Moves to a pinned destination, dropping whatever the recordings list and
+    /// a previous search result had selected.
+    private func go(_ destination: Route) {
+        route = destination
+        selection.removeAll()
+        focus = nil
     }
 
     private var deleteTitle: String {
@@ -308,6 +330,12 @@ struct RootView: View {
                 selection = [session.id]
                 route = .session(session.id)
             }
+        case .search:
+            SearchView { sessionID, target in
+                focus = target
+                selection = [sessionID]
+                route = .session(sessionID)
+            }
         case .settings:
             SettingsView()
         case .glossary:
@@ -323,6 +351,7 @@ struct RootView: View {
                     session: session,
                     ai: activity.ai(for: session.id),
                     enhancer: activity.enhancer(for: session.id),
+                    focus: focus,
                     // Routed back here rather than deleted in place: the
                     // confirmation, the route reset, and forgetting any running
                     // activity all live in `confirmDelete`, and a second copy

@@ -25,6 +25,9 @@ struct SessionDetailView: View {
     /// view so navigating away does not cancel it.
     @ObservedObject var ai: AIActionRunner
     @ObservedObject var enhancer: SessionEnhancer
+    /// Where to land, when this recording was opened from search rather than
+    /// from the list. Nil for an ordinary visit, which starts at the top.
+    var focus: SessionFocus?
     /// Asks the sidebar to delete this recording, which owns the confirmation.
     var onDelete: ((Session) -> Void)?
     @StateObject private var notes = NotesDocument()
@@ -65,6 +68,8 @@ struct SessionDetailView: View {
     /// Glossary terms found in this transcript. Matched when either side
     /// changes, never during a render.
     @State private var termOccurrences: [TermsPane.Occurrence] = []
+    /// Line to scroll to once the document has rows to scroll to.
+    @State private var focusedSegmentID: TranscriptSegment.ID?
     @State private var scrubbing = false
     @State private var scrubValue: TimeInterval = 0
 
@@ -108,8 +113,11 @@ struct SessionDetailView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { load() }
+        .onAppear { load(); applyFocus() }
         .onChange(of: session.id) { _, _ in load() }
+        // The view is keyed on the session, so opening a second result from the
+        // same recording reuses this instance — only the target changes.
+        .onChange(of: focus) { _, _ in applyFocus() }
         .onChange(of: ai.completions) { _, _ in
             load()
             notes.reload()
@@ -387,6 +395,17 @@ struct SessionDetailView: View {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
+            // A task rather than `onChange`, so it also covers the first
+            // appearance — and after a beat, because a scroll view cannot
+            // scroll to a row it has not laid out yet.
+            .task(id: focusedSegmentID) {
+                guard let id = focusedSegmentID else { return }
+                try? await Task.sleep(for: .milliseconds(60))
+                guard !Task.isCancelled else { return }
+                withAnimation(.smooth(duration: 0.3)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
     }
 
@@ -571,6 +590,27 @@ struct SessionDetailView: View {
         // carrying the choice across recordings that do not all have the same
         // panes to offer.
         if !hasScreen, pane == .screen { paneRaw = Pane.transcript.rawValue }
+    }
+
+    /// Opens the recording where the caller asked for, rather than at the top.
+    ///
+    /// Seeks without playing: arriving from a search result should show you the
+    /// moment, not start talking at you. The seek is what highlights the line —
+    /// the active-line lookup reads the playhead, so moving it does the rest.
+    private func applyFocus() {
+        guard let focus else { return }
+
+        switch focus.scope {
+        case .notes:
+            paneRaw = Pane.notes.rawValue
+        case .transcript, .sections:
+            paneRaw = Pane.transcript.rawValue
+        case .title:
+            break
+        }
+
+        if let time = focus.time { player.seek(to: time) }
+        focusedSegmentID = focus.segmentID
     }
 
     /// Cached summaries come back inline; anything else is read off the main
